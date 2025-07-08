@@ -13,7 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-/home/vivek/Codes/LFX/kubeedge/keadm/cmd/keadm/app/cmd/util/image.go
+
 package util
 
 import (

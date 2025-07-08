@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"time"
 	"context"
 	"fmt"
 	"os"
@@ -276,7 +277,7 @@ func (ktg *KubeEdgeTestGenerator) buildKubeEdgePrompt(filePath string, originalC
 	return prompt.String()
 }
 
-// generateWithGemini calls Gemini API to generate test content
+// generateWithGemini calls Gemini API to generate test content (with detailed logging)
 func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt string, testType string) (string, error) {
 	model := ktg.client.GenerativeModel("gemini-1.5-flash")
 	
@@ -285,7 +286,22 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 	model.SetTopK(40)
 	model.SetTopP(0.95)
 	
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	// Log request details
+	ktg.logAPIRequest(prompt, testType)
+	
+	// Add timeout context (2 minutes instead of default)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	
+	startTime := time.Now()
+	resp, err := model.GenerateContent(timeoutCtx, genai.Text(prompt))
+	duration := time.Since(startTime)
+	
+	fmt.Printf("⏱️ API Call Duration: %v\n", duration)
+	
+	// Log response details
+	ktg.logAPIResponse(resp, err)
+	
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %v", err)
 	}
@@ -305,6 +321,7 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 		return "", fmt.Errorf("empty content generated")
 	}
 
+	fmt.Printf("✅ Successfully extracted %d characters of generated code\n", len(generatedCode))
 	return generatedCode, nil
 }
 
@@ -476,6 +493,69 @@ func (ktg *KubeEdgeTestGenerator) addImport(content string, importPath string) s
 	}
 	
 	return content
+}
+
+// logAPIRequest logs the API request details
+func (ktg *KubeEdgeTestGenerator) logAPIRequest(prompt string, testType string) {
+	fmt.Printf("🔍 API Request Details:\n")
+	fmt.Printf("   Model: gemini-1.5-flash\n")
+	fmt.Printf("   Test Type: %s\n", testType)
+	fmt.Printf("   Prompt Length: %d characters\n", len(prompt))
+	fmt.Printf("   Prompt Preview (first 500 chars):\n")
+	if len(prompt) > 500 {
+		fmt.Printf("   %s...\n", prompt[:500])
+	} else {
+		fmt.Printf("   %s\n", prompt)
+	}
+	fmt.Printf("   Temperature: 0.3\n")
+	fmt.Printf("   TopK: 40\n")
+	fmt.Printf("   TopP: 0.95\n")
+	fmt.Printf("🚀 Sending request to Gemini API...\n")
+}
+
+// logAPIResponse logs the API response details
+func (ktg *KubeEdgeTestGenerator) logAPIResponse(resp *genai.GenerateContentResponse, err error) {
+	if err != nil {
+		fmt.Printf("❌ API Error Details:\n")
+		fmt.Printf("   Error Type: %T\n", err)
+		fmt.Printf("   Error Message: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ API Response Details:\n")
+	fmt.Printf("   Candidates Count: %d\n", len(resp.Candidates))
+	
+	if len(resp.Candidates) > 0 {
+		candidate := resp.Candidates[0]
+		fmt.Printf("   Content Parts: %d\n", len(candidate.Content.Parts))
+		
+		totalLength := 0
+		for i, part := range candidate.Content.Parts {
+			if text, ok := part.(genai.Text); ok {
+				partLength := len(string(text))
+				totalLength += partLength
+				fmt.Printf("   Part %d Length: %d characters\n", i+1, partLength)
+			}
+		}
+		fmt.Printf("   Total Response Length: %d characters\n", totalLength)
+		
+		// Show first 200 characters of response
+		if totalLength > 0 {
+			var firstText string
+			for _, part := range candidate.Content.Parts {
+				if text, ok := part.(genai.Text); ok {
+					firstText = string(text)
+					break
+				}
+			}
+			fmt.Printf("   Response Preview (first 200 chars):\n")
+			if len(firstText) > 200 {
+				fmt.Printf("   %s...\n", firstText[:200])
+			} else {
+				fmt.Printf("   %s\n", firstText)
+			}
+		}
+	}
 }
 
 // Close closes the Gemini client
