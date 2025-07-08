@@ -139,18 +139,16 @@ jobs:
     - name: Run auto test generator
       if: steps.pr_info.outputs.changed_files != ''
       run: |
-        cd scripts/test-generator
-        
         echo "🤖 Starting KubeEdge Auto Test Generator..."
         echo "📁 Processing files: ${{ steps.pr_info.outputs.changed_files }}"
         echo "🎯 Coverage threshold: ${{ env.COVERAGE_THRESHOLD }}%"
         echo "🔄 Max retry attempts: ${{ env.MAX_RETRY_ATTEMPTS }}"
         
-        # Create logs directory if it doesn't exist
+        # Create logs directory and run from scripts/test-generator
+        cd scripts/test-generator
         mkdir -p logs
         
-        # Run the auto test generator from scripts/test-generator directory
-        # FIXED: Use vivekbisen04 fork instead of kubeedge upstream
+        # Run the auto test generator
         go run . \
           -pr-number="${{ steps.pr_info.outputs.pr_number }}" \
           -changed-files="${{ steps.pr_info.outputs.changed_files }}" \
