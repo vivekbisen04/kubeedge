@@ -1,0 +1,281 @@
+package main
+
+import (
+	"embed"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"text/template"
+)
+
+//go:embed templates/*
+var templateFS embed.FS
+
+// TemplateData contains variables for template rendering
+type TemplateData struct {
+	PackageName   string
+	ComponentName string
+	Functions     []FunctionInfo
+	Imports       []string
+}
+
+// loadGoMonkeyTemplate loads the gomonkey test template
+func loadGoMonkeyTemplate() string {
+	content, err := templateFS.ReadFile("templates/gomonkey-template.go")
+	if err != nil {
+		// Fallback to hardcoded template
+		return getHardcodedGoMonkeyTemplate()
+	}
+	return string(content)
+}
+
+// loadGinkgoTemplate loads the Ginkgo BDD test template
+func loadGinkgoTemplate() string {
+	content, err := templateFS.ReadFile("templates/ginkgo-template.go")
+	if err != nil {
+		// Fallback to hardcoded template
+		return getHardcodedGinkgoTemplate()
+	}
+	return string(content)
+}
+
+// loadStandardTemplate loads the standard Go test template
+func loadStandardTemplate() string {
+	content, err := templateFS.ReadFile("templates/standard-template.go")
+	if err != nil {
+		// Fallback to hardcoded template
+		return getHardcodedStandardTemplate()
+	}
+	return string(content)
+}
+
+// renderTemplate renders a template with the given data
+func renderTemplate(templateContent string, data TemplateData) (string, error) {
+	tmpl, err := template.New("test").Parse(templateContent)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse template: %v", err)
+	}
+
+	var result strings.Builder
+	err = tmpl.Execute(&result, data)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute template: %v", err)
+	}
+
+	return result.String(), nil
+}
+
+// getTemplateForComponent returns the appropriate template for a KubeEdge component
+func getTemplateForComponent(filePath string, functions []FunctionInfo, content string) (string, string) {
+	component := identifyKubeEdgeComponent(filePath)
+	
+	// Determine test type based on content and component
+	if needsGoMonkeyMocking(functions, content) {
+		return loadGoMonkeyTemplate(), "gomonkey"
+	}
+	
+	if needsGinkgoBDD(filePath, component) {
+		return loadGinkgoTemplate(), "ginkgo"
+	}
+	
+	return loadStandardTemplate(), "standard"
+}
+
+// needsGoMonkeyMocking determines if the code needs gomonkey mocking
+func needsGoMonkeyMocking(functions []FunctionInfo, content string) bool {
+	// Check for external dependencies that need mocking
+	mockPatterns := []string{
+		"exec.Command", "os.Stat", "os.ReadFile", "os.WriteFile",
+		"kubernetes.NewForConfig", "client.Get", "client.Create",
+		"orm.RegisterDriver", "orm.NewOrmUsingDB",
+		"http.Get", "http.Post", "net.Dial",
+	}
+	
+	for _, pattern := range mockPatterns {
+		if strings.Contains(content, pattern) {
+			return true
+		}
+	}
+	
+	// Check function complexity
+	for _, fn := range functions {
+		if len(strings.Split(fn.Content, "\n")) > 10 {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// needsGinkgoBDD determines if Ginkgo BDD framework should be used
+func needsGinkgoBDD(filePath, component string) bool {
+	// Use Ginkgo for e2e and integration tests
+	if strings.Contains(filePath, "e2e") || 
+	   strings.Contains(filePath, "integration") ||
+	   strings.Contains(filePath, "test/") {
+		return true
+	}
+	
+	// Some components prefer BDD-style tests
+	if component == "cloud" && strings.Contains(filePath, "controller") {
+		return true
+	}
+	
+	return false
+}
+
+// identifyKubeEdgeComponent identifies which KubeEdge component a file belongs to
+func identifyKubeEdgeComponent(filePath string) string {
+	if strings.Contains(filePath, "keadm/") {
+		return "keadm"
+	}
+	if strings.Contains(filePath, "cloud/") {
+		return "cloud"
+	}
+	if strings.Contains(filePath, "edge/") {
+		return "edge"
+	}
+	if strings.Contains(filePath, "pkg/") {
+		return "pkg"
+	}
+	return "unknown"
+}
+
+// extractTemplateData extracts data needed for template rendering
+func extractTemplateData(filePath string, functions []FunctionInfo) TemplateData {
+	packageName := extractPackageName(filePath)
+	componentName := strings.Title(identifyKubeEdgeComponent(filePath))
+	
+	// Extract common imports for the component
+	imports := getCommonImports(filePath)
+	
+	return TemplateData{
+		PackageName:   packageName,
+		ComponentName: componentName,
+		Functions:     functions,
+		Imports:       imports,
+	}
+}
+
+// extractPackageName extracts package name from file path
+func extractPackageName(filePath string) string {
+	dir := filepath.Dir(filePath)
+	return filepath.Base(dir)
+}
+
+// getCommonImports returns common imports for different KubeEdge components
+func getCommonImports(filePath string) []string {
+	component := identifyKubeEdgeComponent(filePath)
+	
+	baseImports := []string{
+		"testing",
+		"github.com/stretchr/testify/assert",
+	}
+	
+	switch component {
+	case "keadm":
+		return append(baseImports, 
+			"os",
+			"os/exec", 
+			"github.com/agiledragon/gomonkey/v2",
+			"reflect",
+		)
+	case "cloud":
+		return append(baseImports,
+			"context",
+			"k8s.io/client-go/kubernetes",
+			"k8s.io/apimachinery/pkg/apis/meta/v1",
+			"github.com/agiledragon/gomonkey/v2",
+			"reflect",
+		)
+	case "edge":
+		return append(baseImports,
+			"context",
+			"github.com/beego/beego/v2/client/orm",
+			"github.com/agiledragon/gomonkey/v2",
+			"reflect",
+		)
+	case "pkg":
+		return append(baseImports,
+			"github.com/agiledragon/gomonkey/v2",
+			"reflect",
+		)
+	default:
+		return baseImports
+	}
+}
+
+// Hardcoded templates as fallback (simplified versions)
+func getHardcodedGoMonkeyTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	"testing"
+	"reflect"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/stretchr/testify/assert"
+)
+
+// Auto-generated tests using gomonkey patterns
+{{range .Functions}}
+func Test{{.Name}}(t *testing.T) {
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	// Add your gomonkey patches here
+	// patches.ApplyFunc(externalFunc, mockFunc)
+
+	// Test the function
+	// Add your test logic here
+	assert.True(t, true) // Replace with actual assertions
+}
+{{end}}
+`
+}
+
+func getHardcodedGinkgoTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("{{.ComponentName}}", func() {
+	{{range .Functions}}
+	Describe("{{.Name}}", func() {
+		Context("When called with valid parameters", func() {
+			It("Should execute successfully", func() {
+				// Add your test logic here
+				Expect(true).To(BeTrue()) // Replace with actual expectations
+			})
+		})
+	})
+	{{end}}
+})
+`
+}
+
+func getHardcodedStandardTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// Auto-generated standard Go tests
+{{range .Functions}}
+func Test{{.Name}}(t *testing.T) {
+	// Test successful case
+	// Add your test logic here
+	assert.True(t, true) // Replace with actual assertions
+
+	// Test error cases
+	// Add error case tests here
+}
+{{end}}
+`
+}
