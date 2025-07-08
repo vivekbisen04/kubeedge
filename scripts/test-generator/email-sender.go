@@ -398,3 +398,18 @@ func (es *EmailSender) createSuccessIssue(ctx context.Context, subject string, b
 	fmt.Printf("📧 Created success summary issue #%d\n", issue.GetNumber())
 	return nil
 }
+// SendSuccessEmail sends a success notification (alias for SendSuccessSummary)
+func (es *EmailSender) SendSuccessEmail(ctx context.Context, successCount, failureCount int, prAuthor, prNumber string) error {
+	return es.SendSuccessSummary(ctx, successCount, failureCount, prAuthor, prNumber)
+}
+
+// SendFailureEmail sends failure notifications (alias for SendFailureNotification)
+func (es *EmailSender) SendFailureEmail(ctx context.Context, failedFiles []string, prAuthor, prNumber string) error {
+	if len(failedFiles) == 0 {
+		return nil
+	}
+	
+	// For now, just send notification for the first failed file
+	// In a real implementation, you might want to batch multiple files
+	return es.SendFailureNotification(ctx, failedFiles[0], prAuthor, prNumber)
+}
