@@ -1,0 +1,3 @@
+.env
+*.env
+scripts/test-generator/logs/

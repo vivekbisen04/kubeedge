@@ -1,0 +1,19 @@
+2025/07/08 10:38:16 🔧 Debug logging enabled
+2025/07/08 10:38:16 🤖 Starting KubeEdge Auto Test Generator
+2025/07/08 10:38:16 📊 Coverage threshold: 50.0%
+2025/07/08 10:38:16 🔄 Max retry attempts: 1
+2025/07/08 10:38:16 🔧 Debug mode: true
+2025/07/08 10:38:17 
+📁 Processing file: keadm/cmd/keadm/app/cmd/util/image.go
+2025/07/08 10:41:49 🎯 File keadm/cmd/keadm/app/cmd/util/image.go needs tests (coverage: 0.00%)
+2025/07/08 10:41:49 🔍 Found 7 functions to test in keadm/cmd/keadm/app/cmd/util/image.go
+2025/07/08 10:41:49 🔄 Attempt 1/1 for keadm/cmd/keadm/app/cmd/util/image.go
+2025/07/08 10:41:49 ⚠️ Generation failed (attempt 1): failed to read original file: open keadm/cmd/keadm/app/cmd/util/image.go: no such file or directory
+2025/07/08 10:41:49 ❌ All 1 attempts failed for keadm/cmd/keadm/app/cmd/util/image.go
+2025/07/08 10:41:49 ❌ Failed to process keadm/cmd/keadm/app/cmd/util/image.go: test generation failed after 1 attempts
+2025/07/08 10:41:49 ⚠️ Failed to send failure notification: no email recipients found
+2025/07/08 10:41:49 
+📈 Generation Summary:
+2025/07/08 10:41:49 ✅ Successful: 0 files
+2025/07/08 10:41:49 ❌ Failed: 1 files
+2025/07/08 10:41:49 📊 Total processed: 1 files

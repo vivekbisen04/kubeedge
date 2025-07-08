@@ -1,0 +1,14 @@
+2025/07/08 12:10:05 🔧 Debug logging enabled
+2025/07/08 12:10:05 🤖 Starting KubeEdge Auto Test Generator
+2025/07/08 12:10:05 📊 Coverage threshold: 50.0%
+2025/07/08 12:10:05 🔄 Max retry attempts: 1
+2025/07/08 12:10:05 🔧 Debug mode: true
+2025/07/08 12:10:05 
+📁 Processing file: /home/vivek/Codes/LFX/kubeedge/keadm/cmd/keadm/app/cmd/util/image.go
+2025/07/08 12:12:07 🎯 File /home/vivek/Codes/LFX/kubeedge/keadm/cmd/keadm/app/cmd/util/image.go needs tests (coverage: 0.00%)
+2025/07/08 12:12:07 ❌ Failed to process /home/vivek/Codes/LFX/kubeedge/keadm/cmd/keadm/app/cmd/util/image.go: function extraction failed: failed to read file: open /home/vivek/Codes/LFX/kubeedge/home/vivek/Codes/LFX/kubeedge/keadm/cmd/keadm/app/cmd/util/image.go: no such file or directory
+2025/07/08 12:12:20 
+📈 Generation Summary:
+2025/07/08 12:12:20 ✅ Successful: 0 files
+2025/07/08 12:12:20 ❌ Failed: 1 files
+2025/07/08 12:12:20 📊 Total processed: 1 files

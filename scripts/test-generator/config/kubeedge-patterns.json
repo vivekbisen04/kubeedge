@@ -1,0 +1,285 @@
+{
+  "version": "1.0.0",
+  "description": "KubeEdge testing patterns and configurations for auto test generation",
+  "mockingFramework": "gomonkey",
+  "testingFrameworks": ["standard", "ginkgo"],
+  "coverageThreshold": 40.0,
+  "maxRetryAttempts": 3,
+  
+  "components": {
+    "keadm": {
+      "description": "KubeEdge admin CLI tool",
+      "priority": "high",
+      "currentCoverage": 45.52,
+      "targetCoverage": 60.0,
+      "preferredFramework": "standard",
+      "commonPatterns": [
+        "command_execution",
+        "file_operations", 
+        "configuration_validation",
+        "error_handling"
+      ]
+    },
+    "cloud": {
+      "description": "Cloud components and controllers",
+      "priority": "high", 
+      "currentCoverage": 41.89,
+      "targetCoverage": 60.0,
+      "preferredFramework": "standard",
+      "commonPatterns": [
+        "kubernetes_client",
+        "webhook_handlers",
+        "admission_controllers",
+        "resource_management"
+      ]
+    },
+    "edge": {
+      "description": "Edge components and device management",
+      "priority": "medium",
+      "currentCoverage": 63.76,
+      "targetCoverage": 70.0,
+      "preferredFramework": "standard",
+      "commonPatterns": [
+        "device_management",
+        "message_routing", 
+        "protocol_handlers",
+        "database_operations"
+      ]
+    },
+    "pkg": {
+      "description": "Shared packages and utilities",
+      "priority": "low",
+      "currentCoverage": 71.54,
+      "targetCoverage": 80.0,
+      "preferredFramework": "standard",
+      "commonPatterns": [
+        "utility_functions",
+        "data_structures",
+        "algorithms",
+        "helpers"
+      ]
+    }
+  },
+
+  "mockingPatterns": {
+    "command_execution": {
+      "description": "Mock command execution (common in keadm)",
+      "interfaces": ["exec.Cmd"],
+      "functions": ["exec.Command", "cmd.Run", "cmd.CombinedOutput"],
+      "template": "patches.ApplyFunc(exec.Command, mockCommand)"
+    },
+    "file_operations": {
+      "description": "Mock file system operations",
+      "functions": ["os.Stat", "os.ReadFile", "os.WriteFile", "os.Remove", "os.Open"],
+      "template": "patches.ApplyFunc(os.ReadFile, mockReadFile)"
+    },
+    "kubernetes_client": {
+      "description": "Mock Kubernetes client operations",
+      "interfaces": ["kubernetes.Interface", "rest.Interface"],
+      "functions": ["kubernetes.NewForConfig", "client.Get", "client.Create", "client.Update"],
+      "template": "patches.ApplyFunc(kubernetes.NewForConfig, mockKubeClient)"
+    },
+    "database_operations": {
+      "description": "Mock Beego ORM operations (common in edge)",
+      "interfaces": ["orm.Ormer", "orm.QuerySeter", "orm.RawSeter"],
+      "functions": ["orm.NewOrmUsingDB", "orm.RegisterDriver", "orm.RegisterDataBase"],
+      "template": "patches.ApplyFunc(orm.NewOrmUsingDB, mockOrmer)"
+    },
+    "http_operations": {
+      "description": "Mock HTTP client operations",
+      "functions": ["http.Get", "http.Post", "http.NewRequest", "client.Do"],
+      "template": "patches.ApplyFunc(http.Get, mockHTTPGet)"
+    },
+    "network_operations": {
+      "description": "Mock network operations",
+      "functions": ["net.Dial", "net.Listen", "conn.Read", "conn.Write"],
+      "template": "patches.ApplyFunc(net.Dial, mockNetDial)"
+    }
+  },
+
+  "testPatterns": {
+    "table_driven": {
+      "description": "Table-driven tests (recommended for KubeEdge)",
+      "usage": "multiple_scenarios",
+      "template": "table_driven_template"
+    },
+    "error_handling": {
+      "description": "Error case testing patterns",
+      "usage": "error_scenarios",
+      "template": "error_handling_template"
+    },
+    "concurrent": {
+      "description": "Concurrent operation testing",
+      "usage": "thread_safety",
+      "template": "concurrent_template"
+    },
+    "benchmark": {
+      "description": "Performance testing patterns",
+      "usage": "performance_critical",
+      "template": "benchmark_template"
+    }
+  },
+
+  "ginkgoPatterns": {
+    "bdd_structure": {
+      "description": "Basic BDD structure for Ginkgo",
+      "pattern": "Describe -> Context -> It",
+      "usage": ["e2e_tests", "integration_tests", "behavior_testing"]
+    },
+    "setup_teardown": {
+      "description": "Setup and teardown patterns",
+      "hooks": ["BeforeEach", "AfterEach", "BeforeAll", "AfterAll"],
+      "usage": ["resource_management", "test_isolation"]
+    }
+  },
+
+  "filePatterns": {
+    "exclude": [
+      "**/*_test.go",
+      "**/vendor/**",
+      "**/build/**",
+      "**/*.pb.go",
+      "**/mock_*.go",
+      "**/fake_*.go"
+    ],
+    "include": [
+      "**/*.go"
+    ],
+    "priorityPaths": [
+      "keadm/cmd/keadm/app/cmd/",
+      "cloud/pkg/",
+      "edge/pkg/",
+      "pkg/"
+    ]
+  },
+
+  "qualityChecks": {
+    "compilation": {
+      "enabled": true,
+      "timeout": "2m",
+      "description": "Verify generated tests compile"
+    },
+    "execution": {
+      "enabled": true,
+      "timeout": "5m", 
+      "description": "Verify generated tests run successfully"
+    },
+    "coverage": {
+      "enabled": true,
+      "minimumImprovement": 5.0,
+      "description": "Verify tests improve coverage by at least 5%"
+    }
+  },
+
+  "llmConfiguration": {
+    "provider": "gemini",
+    "model": "gemini-1.5-flash",
+    "temperature": 0.3,
+    "maxTokens": 4096,
+    "systemPrompt": "You are an expert Go developer specializing in KubeEdge testing patterns. Generate high-quality, compilable unit tests following KubeEdge conventions.",
+    "contextWindow": 8192
+  },
+
+  "dockerConfiguration": {
+    "image": "kubeedge/build-tools:1.22.9-ke1",
+    "workdir": "/workspace",
+    "memoryLimit": "512m",
+    "cpuLimit": "1.0",
+    "networkMode": "none",
+    "timeout": "10m"
+  },
+
+  "githubConfiguration": {
+    "branchPrefix": "auto-test-generation",
+    "prLabels": ["auto-generated", "tests", "low-coverage"],
+    "reviewerSources": ["OWNERS", "CODEOWNERS", "collaborators"],
+    "maxReviewers": 3
+  },
+
+  "notificationConfiguration": {
+    "emailEnabled": false,
+    "githubIssuesEnabled": true,
+    "slackEnabled": false,
+    "successThreshold": 2,
+    "failureCreateIssue": true
+  },
+
+  "commonImports": {
+    "standard": [
+      "testing",
+      "github.com/stretchr/testify/assert",
+      "github.com/stretchr/testify/require"
+    ],
+    "gomonkey": [
+      "testing",
+      "reflect",
+      "github.com/agiledragon/gomonkey/v2",
+      "github.com/stretchr/testify/assert"
+    ],
+    "ginkgo": [
+      "github.com/onsi/ginkgo/v2",
+      "github.com/onsi/gomega"
+    ],
+    "keadm": [
+      "os",
+      "os/exec",
+      "path/filepath",
+      "strings"
+    ],
+    "cloud": [
+      "context",
+      "k8s.io/client-go/kubernetes",
+      "k8s.io/apimachinery/pkg/apis/meta/v1",
+      "k8s.io/client-go/rest"
+    ],
+    "edge": [
+      "context",
+      "github.com/beego/beego/v2/client/orm",
+      "github.com/eclipse/paho.mqtt.golang"
+    ],
+    "pkg": [
+      "context",
+      "fmt",
+      "strings"
+    ]
+  },
+
+  "complexityThresholds": {
+    "linesOfCode": 10,
+    "cyclomaticComplexity": 5,
+    "numberOfParameters": 4,
+    "numberOfReturnValues": 2,
+    "nestingDepth": 3
+  },
+
+  "testNamingConventions": {
+    "testFunctionPrefix": "Test",
+    "benchmarkFunctionPrefix": "Benchmark",
+    "exampleFunctionPrefix": "Example",
+    "helperFunctionPrefix": "test",
+    "mockStructPrefix": "Mock",
+    "tableTestVariable": "tests"
+  },
+
+  "codeQualityRules": {
+    "maxTestFunctionLength": 50,
+    "maxTableTestCases": 10,
+    "requireErrorMessages": true,
+    "requireTestComments": true,
+    "enforceAssertions": true,
+    "preventHardcodedValues": true
+  },
+
+  "retryConfiguration": {
+    "maxAttempts": 3,
+    "backoffStrategy": "exponential",
+    "initialDelay": "1s",
+    "maxDelay": "10s",
+    "retryOnErrors": [
+      "compilation_error",
+      "test_execution_error",
+      "import_error",
+      "syntax_error"
+    ]
+  }
+}
