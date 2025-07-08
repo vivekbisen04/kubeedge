@@ -37,7 +37,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.23' # Updated to match KubeEdge's Go version
+        go-version: '1.23'
 
     - name: Install dependencies
       run: |
@@ -75,16 +75,14 @@ jobs:
     - name: Setup test generator workspace
       if: steps.pr_info.outputs.changed_files != ''
       run: |
-        cd scripts/test-generator
-        
-        # Verify go.mod exists with correct content
-        if [ ! -f go.mod ]; then
-          echo "❌ go.mod not found in scripts/test-generator/"
-          echo "Please ensure the project structure is set up correctly"
+        # Verify we're in the KubeEdge repository root
+        if [ ! -f go.mod ] || ! grep -q "github.com/kubeedge/kubeedge" go.mod; then
+          echo "❌ Not in KubeEdge repository root or go.mod missing"
           exit 1
         fi
         
-        # Verify required files exist
+        # Verify required files exist in scripts/test-generator/
+        cd scripts/test-generator
         REQUIRED_FILES="main.go coverage-analyzer.go test-generator.go pr-creator.go email-sender.go template-loader.go"
         for file in $REQUIRED_FILES; do
           if [ ! -f "$file" ]; then
@@ -95,7 +93,9 @@ jobs:
         
         echo "✅ All required files found"
         
-        # Download dependencies
+        # Use root module dependencies (no separate go.mod needed)
+        cd ../..
+        echo "📦 Using root KubeEdge module dependencies"
         go mod download
         go mod tidy
 
@@ -149,58 +149,34 @@ jobs:
         # Create logs directory if it doesn't exist
         mkdir -p logs
         
-        # Run the auto test generator
+        # Run the auto test generator from scripts/test-generator directory
+        # but using the root module context
+        cd scripts/test-generator
         go run . \
-          --pr-number="${{ steps.pr_info.outputs.pr_number }}" \
-          --changed-files="${{ steps.pr_info.outputs.changed_files }}" \
-          --repo-owner="${{ github.repository_owner }}" \
-          --repo-name="${{ github.event.repository.name }}" \
-          --github-token="${{ secrets.GITHUB_TOKEN }}" \
-          --gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
-          --coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
-          --max-retry-attempts="${{ env.MAX_RETRY_ATTEMPTS }}" \
-          --pr-author="${{ steps.pr_info.outputs.pr_author }}" \
-          --coverage-file="${{ steps.coverage_analysis.outputs.coverage_file_exists == 'true' && 'coverage.out' || '' }}" \
-          --debug=true
-      env:
-        GO111MODULE: on
+          -pr-number="${{ steps.pr_info.outputs.pr_number }}" \
+          -changed-files="${{ steps.pr_info.outputs.changed_files }}" \
+          -repo-owner="kubeedge" \
+          -repo-name="kubeedge" \
+          -github-token="${{ secrets.GITHUB_TOKEN }}" \
+          -gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
+          -coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
+          -max-retry-attempts="${{ env.MAX_RETRY_ATTEMPTS }}" \
+          -pr-author="${{ steps.pr_info.outputs.pr_author }}" \
+          -coverage-file="../../coverage.out" \
+          -debug=true
 
-    - name: Validate generated tests (optional)
-      if: steps.pr_info.outputs.changed_files != '' && always()
-      run: |
-        echo "🔍 Checking for newly generated test files..."
-        
-        # Find any newly generated test files
-        NEW_TEST_FILES=$(find . -name "*_test.go" -newer scripts/test-generator/main.go 2>/dev/null || echo "")
-        
-        if [ -n "$NEW_TEST_FILES" ]; then
-          echo "✅ Found generated test files:"
-          echo "$NEW_TEST_FILES"
-          
-          # Basic syntax check for generated files
-          for test_file in $NEW_TEST_FILES; do
-            if [ -f "$test_file" ]; then
-              echo "Checking syntax of $test_file..."
-              go fmt "$test_file" > /dev/null || echo "⚠️ Formatting issues in $test_file"
-            fi
-          done
-        else
-          echo "ℹ️ No new test files generated (may be due to sufficient coverage or errors)"
-        fi
-
-    - name: Upload generated test artifacts
+    - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: auto-generated-tests-${{ github.event.pull_request.number }}
+        name: test-generator-logs
         path: |
-          **/*_test.go
           scripts/test-generator/logs/
-          coverage.out
-        retention-days: 30
+          scripts/test-generator/coverage.out
+        retention-days: 7
 
-    - name: Summary comment on original PR
-      if: always() && steps.pr_info.outputs.changed_files != ''
+    - name: Comment on original PR
+      if: steps.pr_info.outputs.changed_files != ''
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -254,5 +230,3 @@ jobs:
         # Log failure information
         echo "❌ Auto test generation failed. Check the logs for details."
         
-        # Optionally create a GitHub issue for persistent failures
-        # This can be implemented later if needed
