@@ -16,7 +16,7 @@ env:
 jobs:
   auto-test-generator:
     # Only run on merged PRs to main repository
-    if: github.event.pull_request.merged == true && github.repository == 'kubeedge/kubeedge'
+    if: github.event.pull_request.merged == true && github.repository == 'vivekbisen04/kubeedge'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     name: Generate Tests for Low Coverage Files
@@ -150,12 +150,11 @@ jobs:
         mkdir -p logs
         
         # Run the auto test generator from scripts/test-generator directory
-        # but using the root module context
-        cd scripts/test-generator
+        # FIXED: Use vivekbisen04 fork instead of kubeedge upstream
         go run . \
           -pr-number="${{ steps.pr_info.outputs.pr_number }}" \
           -changed-files="${{ steps.pr_info.outputs.changed_files }}" \
-          -repo-owner="kubeedge" \
+          -repo-owner="vivekbisen04" \
           -repo-name="kubeedge" \
           -github-token="${{ secrets.GITHUB_TOKEN }}" \
           -gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
@@ -229,4 +228,3 @@ jobs:
         
         # Log failure information
         echo "❌ Auto test generation failed. Check the logs for details."
-        
