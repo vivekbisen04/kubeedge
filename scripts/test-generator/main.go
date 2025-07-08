@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main implements the KubeEdge Auto Test Generator
+// This tool runs as part of KubeEdge's main module and uses existing dependencies
 package main
 
 import (
@@ -74,10 +76,13 @@ func main() {
 	log.Printf("📊 Coverage threshold: %.1f%%", config.CoverageThreshold)
 	log.Printf("🔄 Max retry attempts: %d", config.MaxRetryAttempts)
 	log.Printf("🔧 Debug mode: %t", config.Debug)
+	log.Printf("📁 Working directory: %s", getWorkingDir())
 
-	// Initialize services (without Docker for demo)
+	// Initialize services
 	coverageAnalyzer := NewCoverageAnalyzer(config.CoverageFile)
 	testGenerator := NewKubeEdgeTestGenerator(config.GeminiAPIKey)
+	defer testGenerator.Close()
+	
 	prCreator := NewPRCreator(config.GithubToken, config.RepoOwner, config.RepoName)
 	emailSender := NewEmailSender(config.RepoOwner, config.RepoName)
 
@@ -88,52 +93,79 @@ func main() {
 
 	// Parse changed files
 	changedFiles := strings.Split(config.ChangedFiles, "\n")
+	var results []ProcessingResult
 	successCount := 0
 	failureCount := 0
-	var results []ProcessingResult
 
-	for _, file := range changedFiles {
-		file = strings.TrimSpace(file)
-		if file == "" {
+	// Process each changed file
+	for _, filePath := range changedFiles {
+		filePath = strings.TrimSpace(filePath)
+		if filePath == "" {
 			continue
 		}
 
-		log.Printf("\n📁 Processing file: %s", file)
-		
-		result := processFile(ctx, file, config, coverageAnalyzer, testGenerator, prCreator)
+		log.Printf("📁 Processing file: %s", filePath)
+		result := processFile(ctx, filePath, config, coverageAnalyzer, testGenerator, prCreator)
 		results = append(results, result)
-		
+
 		if result.Success {
 			successCount++
-			log.Printf("✅ Successfully processed %s", file)
+			log.Printf("✅ Successfully processed %s (PR #%d, Duration: %v)", 
+				result.FilePath, result.TestsPRNumber, result.Duration)
 		} else {
 			failureCount++
-			log.Printf("❌ Failed to process %s: %v", file, result.Error)
-			
-			// Send failure notification
-			if err := emailSender.SendFailureNotification(ctx, file, config.PRAuthor, config.PRNumber); err != nil {
-				log.Printf("⚠️ Failed to send failure notification: %v", err)
-			}
+			log.Printf("❌ Failed to process %s: %v (Duration: %v)", 
+				result.FilePath, result.Error, result.Duration)
 		}
 	}
 
-	// Final summary
-	log.Printf("\n📈 Generation Summary:")
-	log.Printf("✅ Successful: %d files", successCount)
-	log.Printf("❌ Failed: %d files", failureCount)
-	log.Printf("📊 Total processed: %d files", successCount+failureCount)
-
+	// Send notifications
+	log.Printf("📧 Sending notifications...")
+	
+	// Send success summary if there were successful generations
 	if successCount > 0 {
-		// Send success summary
-		if err := emailSender.SendSuccessSummary(ctx, successCount, failureCount, config.PRAuthor, config.PRNumber); err != nil {
-			log.Printf("⚠️ Failed to send success summary: %v", err)
+		err := emailSender.SendSuccessEmail(ctx, successCount, failureCount, config.PRAuthor, config.PRNumber)
+		if err != nil {
+			log.Printf("⚠️ Failed to send success notification: %v", err)
 		}
+	}
+
+	// Send failure notifications for failed files
+	failedFiles := make([]string, 0)
+	for _, result := range results {
+		if !result.Success {
+			failedFiles = append(failedFiles, result.FilePath)
+		}
+	}
+
+	if len(failedFiles) > 0 {
+		err := emailSender.SendFailureEmail(ctx, failedFiles, config.PRAuthor, config.PRNumber)
+		if err != nil {
+			log.Printf("⚠️ Failed to send failure notification: %v", err)
+		}
+	}
+
+	// Print final summary
+	log.Printf("🎉 KubeEdge Auto Test Generator completed!")
+	log.Printf("📊 Summary: %d successful, %d failed", successCount, failureCount)
+	
+	if failureCount > 0 {
+		os.Exit(1)
 	}
 }
 
+// getWorkingDir returns the current working directory for debugging
+func getWorkingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "unknown"
+	}
+	return wd
+}
+
+// processFile processes a single Go file for test generation
 func processFile(ctx context.Context, filePath string, config *Config, 
-	coverageAnalyzer *CoverageAnalyzer, testGenerator *KubeEdgeTestGenerator, 
-	prCreator *PRCreator) ProcessingResult {
+	analyzer *CoverageAnalyzer, generator *KubeEdgeTestGenerator, creator *PRCreator) ProcessingResult {
 	
 	startTime := time.Now()
 	result := ProcessingResult{
@@ -141,83 +173,71 @@ func processFile(ctx context.Context, filePath string, config *Config,
 		Duration: 0,
 	}
 
-	// Check if file needs tests based on coverage
-	needsTests, coverage, err := coverageAnalyzer.AnalyzeFile(ctx, filePath, config.CoverageThreshold)
+	defer func() {
+		result.Duration = time.Since(startTime)
+	}()
+
+	// Step 1: Analyze coverage
+	needsTests, coverage, err := analyzer.AnalyzeFile(ctx, filePath, config.CoverageThreshold)
 	if err != nil {
 		result.Error = fmt.Errorf("coverage analysis failed: %v", err)
-		result.Duration = time.Since(startTime)
 		return result
 	}
-	
+
 	result.Coverage = coverage
+	log.Printf("📊 Coverage for %s: %.2f%% (needs tests: %v)", filePath, coverage, needsTests)
 
 	if !needsTests {
-		log.Printf("✅ File %s has sufficient coverage (%.2f%%), skipping", filePath, coverage)
+		log.Printf("✅ %s has sufficient coverage (%.2f%%), skipping", filePath, coverage)
 		result.Success = true
-		result.Duration = time.Since(startTime)
 		return result
 	}
 
-	log.Printf("🎯 File %s needs tests (coverage: %.2f%%)", filePath, coverage)
-
-	// Extract functions that need testing
-	functions, err := coverageAnalyzer.ExtractModifiedFunctions(ctx, filePath)
+	// Step 2: Extract functions
+	functions, err := analyzer.ExtractModifiedFunctions(ctx, filePath)
 	if err != nil {
 		result.Error = fmt.Errorf("function extraction failed: %v", err)
-		result.Duration = time.Since(startTime)
 		return result
 	}
 
 	if len(functions) == 0 {
 		log.Printf("⚠️ No testable functions found in %s", filePath)
 		result.Success = true
-		result.Duration = time.Since(startTime)
 		return result
 	}
 
 	log.Printf("🔍 Found %d functions to test in %s", len(functions), filePath)
 
-	// Generate tests with retry logic (simplified without Docker validation)
-	testContent, success := generateTestsWithRetry(
-		ctx, testGenerator, filePath, functions, config.MaxRetryAttempts,
-	)
-
+	// Step 3: Generate tests with retry logic
+	testContent, success := generateTestsWithRetry(ctx, filePath, functions, generator, config.MaxRetryAttempts)
 	if !success {
 		result.Error = fmt.Errorf("test generation failed after %d attempts", config.MaxRetryAttempts)
-		result.Duration = time.Since(startTime)
 		return result
 	}
 
-	// Create PR with generated tests
-	testFileName := generateTestFileName(filePath)
-	branchName := generateBranchName(filePath)
-	
-	if err := prCreator.CreateTestPR(ctx, filePath, testFileName, testContent, branchName, coverage); err != nil {
+	// Step 4: Create PR with generated tests
+	prNumber, err := creator.CreateTestsPR(ctx, filePath, testContent, coverage)
+	if err != nil {
 		result.Error = fmt.Errorf("PR creation failed: %v", err)
-		result.Duration = time.Since(startTime)
 		return result
 	}
 
+	result.TestsPRNumber = prNumber
 	result.Success = true
-	result.Duration = time.Since(startTime)
 	return result
 }
 
-func generateTestsWithRetry(
-	ctx context.Context,
-	testGenerator *KubeEdgeTestGenerator,
-	filePath string,
-	functions []FunctionInfo,
-	maxAttempts int,
-) (string, bool) {
+// generateTestsWithRetry attempts to generate tests with retry logic
+func generateTestsWithRetry(ctx context.Context, filePath string, functions []FunctionInfo, 
+	generator *KubeEdgeTestGenerator, maxAttempts int) (string, bool) {
 	
 	var lastError error
 	
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		log.Printf("🔄 Attempt %d/%d for %s", attempt, maxAttempts, filePath)
+		log.Printf("🤖 Generating tests for %s (attempt %d/%d)", filePath, attempt, maxAttempts)
 		
-		// Generate tests using LLM
-		testContent, err := testGenerator.GenerateTests(ctx, filePath, functions, lastError)
+		// Call LLM
+		testContent, err := generator.GenerateTests(ctx, filePath, functions, lastError)
 		if err != nil {
 			lastError = err
 			log.Printf("⚠️ Generation failed (attempt %d): %v", attempt, err)
@@ -320,19 +340,4 @@ func setupLogging(debug bool) error {
 	}
 	
 	return nil
-}
-
-func generateTestFileName(sourceFile string) string {
-	dir := filepath.Dir(sourceFile)
-	base := filepath.Base(sourceFile)
-	name := strings.TrimSuffix(base, filepath.Ext(base))
-	return filepath.Join(dir, name+"_test.go")
-}
-
-func generateBranchName(sourceFile string) string {
-	// Clean the file path for branch name
-	cleanPath := strings.ReplaceAll(sourceFile, "/", "-")
-	cleanPath = strings.ReplaceAll(cleanPath, ".", "-")
-	timestamp := time.Now().Format("20060102-150405")
-	return fmt.Sprintf("auto-test-generation-%s-%s", cleanPath, timestamp)
 }

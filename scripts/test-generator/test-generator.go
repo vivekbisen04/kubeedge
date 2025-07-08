@@ -477,3 +477,10 @@ func (ktg *KubeEdgeTestGenerator) addImport(content string, importPath string) s
 	
 	return content
 }
+
+// Close closes the Gemini client
+func (ktg *KubeEdgeTestGenerator) Close() {
+	if ktg.client != nil {
+		ktg.client.Close()
+	}
+}

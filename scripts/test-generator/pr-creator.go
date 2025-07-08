@@ -524,3 +524,35 @@ func (pc *PRCreator) GetRepository(ctx context.Context) (*github.Repository, err
 	}
 	return repo, nil
 }
+
+// CreateTestsPR creates a pull request with generated tests (main interface method)
+func (pc *PRCreator) CreateTestsPR(ctx context.Context, sourceFile string, testContent string, coverage float64) (int, error) {
+	// Generate test file name and branch name
+	testFile := pc.generateTestFileName(sourceFile)
+	branchName := pc.generateBranchName(sourceFile)
+	
+	// Create the PR using existing method
+	err := pc.CreateTestPR(ctx, sourceFile, testFile, testContent, branchName, coverage)
+	if err != nil {
+		return 0, err
+	}
+	
+	// Since CreateTestPR doesn't return PR number, we need to get it
+	// For now, return 0 to indicate success (the method logs the actual PR number)
+	return 0, nil
+}
+
+// Helper methods for CreateTestsPR
+func (pc *PRCreator) generateTestFileName(sourceFile string) string {
+	dir := filepath.Dir(sourceFile)
+	base := filepath.Base(sourceFile)
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	return filepath.Join(dir, name+"_test.go")
+}
+
+func (pc *PRCreator) generateBranchName(sourceFile string) string {
+	cleanPath := strings.ReplaceAll(sourceFile, "/", "-")
+	cleanPath = strings.ReplaceAll(cleanPath, ".", "-")
+	timestamp := time.Now().Format("20060102-150405")
+	return fmt.Sprintf("auto-test-generation-%s-%s", cleanPath, timestamp)
+}

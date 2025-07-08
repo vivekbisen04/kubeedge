@@ -217,6 +217,80 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// Auto-generated tests using gomonkey patterns
+{{range .Functions}}
+func Test{{.Name}}(t *testing.T) {
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	// Add your gomonkey patches here
+	// patches.ApplyFunc(externalFunc, mockFunc)
+
+	// Test the function
+	// Add your test logic here
+	assert.True(t, true) // Replace with actual assertions
+}
+{{end}}
+`
+}
+
+func getHardcodedGinkgoTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("{{.ComponentName}}", func() {
+	{{range .Functions}}
+	Describe("{{.Name}}", func() {
+		Context("When called with valid parameters", func() {
+			It("Should execute successfully", func() {
+				// Add your test logic here
+				Expect(true).To(BeTrue()) // Replace with actual expectations
+			})
+		})
+	})
+	{{end}}
+})
+`
+}
+
+func getHardcodedStandardTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// Auto-generated standard Go tests
+{{range .Functions}}
+func Test{{.Name}}(t *testing.T) {
+	// Test successful case
+	// Add your test logic here
+	assert.True(t, true) // Replace with actual assertions
+
+	// Test error cases
+	// Add error case tests here
+}
+{{end}}
+`
+}
+// Template loading functions that are called from test-generator.go
+func loadGoMonkeyTemplate() string {
+	return `package {{.PackageName}}
+
+import (
+	"testing"
+	"reflect"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/stretchr/testify/assert"
+)
+
 // Auto-generated tests using gomonkey patterns for KubeEdge
 {{range .Functions}}
 func Test{{.Name}}(t *testing.T) {
@@ -233,7 +307,7 @@ func Test{{.Name}}(t *testing.T) {
 {{end}}`
 }
 
-func getHardcodedGinkgoTemplate() string {
+func loadGinkgoTemplate() string {
 	return `package {{.PackageName}}
 
 import (
@@ -256,7 +330,7 @@ var _ = Describe("{{.ComponentName}}", func() {
 })`
 }
 
-func getHardcodedStandardTemplate() string {
+func loadStandardTemplate() string {
 	return `package {{.PackageName}}
 
 import (
