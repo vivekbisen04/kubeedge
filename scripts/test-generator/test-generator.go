@@ -23,6 +23,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"path/filepath"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -51,11 +52,81 @@ func NewKubeEdgeTestGenerator(apiKey string) *KubeEdgeTestGenerator {
 		templates: templates,
 	}
 }
-
+// ADD this helper function to test-generator.go
+func (ktg *KubeEdgeTestGenerator) findRepoRoot(startDir string) string {
+	currentDir := startDir
+	
+	for i := 0; i < 10; i++ { // Limit search to prevent infinite loop
+		// Check if go.mod exists and contains kubeedge
+		goModPath := filepath.Join(currentDir, "go.mod")
+		if fileExists(goModPath) {
+			// Read go.mod to verify it's the KubeEdge repository
+			content, err := os.ReadFile(goModPath)
+			if err == nil && strings.Contains(string(content), "github.com/kubeedge/kubeedge") {
+				return currentDir
+			}
+		}
+		
+		// Go up one level
+		parentDir := filepath.Dir(currentDir)
+		if parentDir == currentDir {
+			// Reached filesystem root
+			break
+		}
+		currentDir = parentDir
+	}
+	
+	return ""
+}
+func fileeExistOrNot(filename string) bool {
+	_, err := os.Stat(filename)
+	return !os.IsNotExist(err)
+}
+func (ktg *KubeEdgeTestGenerator) resolveFilePath(filePath string) string {
+	// If it's already an absolute path, return as-is
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	
+	// Get current working directory
+	wd, err := os.Getwd()
+	if err != nil {
+		return filePath
+	}
+	
+	// First, try the file path as-is from current directory
+	if fileeExistOrNot(filePath) {
+		absPath, _ := filepath.Abs(filePath)
+		return absPath
+	}
+	
+	// Find the repository root by looking for go.mod
+	repoRoot := ktg.findRepoRoot(wd)
+	if repoRoot == "" {
+		return filePath
+	}
+	
+	// Try resolving from repo root
+	resolvedPath := filepath.Join(repoRoot, filePath)
+	if fileeExistOrNot(resolvedPath) {
+		return filepath.Clean(resolvedPath)
+	}
+	
+	// If still not found, return the resolved path anyway
+	return filepath.Clean(resolvedPath)
+}
 // GenerateTests generates KubeEdge-compliant tests using LLM
 func (ktg *KubeEdgeTestGenerator) GenerateTests(ctx context.Context, filePath string, functions []FunctionInfo, previousError error) (string, error) {
+	// Resolve the file path using the same logic as CoverageAnalyzer
+	resolvedPath := ktg.resolveFilePath(filePath)
+	
+	// Check if file exists
+	if !fileeExistOrNot(resolvedPath) {
+		return "", fmt.Errorf("file not found: %s (resolved to: %s)", filePath, resolvedPath)
+	}
+	
 	// Read the original file to understand context
-	originalContent, err := os.ReadFile(filePath)
+	originalContent, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read original file: %v", err)
 	}
@@ -64,10 +135,10 @@ func (ktg *KubeEdgeTestGenerator) GenerateTests(ctx context.Context, filePath st
 	packageName, imports := ktg.extractPackageInfo(string(originalContent))
 
 	// Determine the appropriate test type based on KubeEdge patterns
-	testType := ktg.determineKubeEdgeTestType(filePath, functions, string(originalContent))
+	testType := ktg.determineKubeEdgeTestType(resolvedPath, functions, string(originalContent))
 
 	// Build KubeEdge-specific prompt
-	prompt := ktg.buildKubeEdgePrompt(filePath, string(originalContent), functions, testType, previousError)
+	prompt := ktg.buildKubeEdgePrompt(resolvedPath, string(originalContent), functions, testType, previousError)
 
 	// Generate with Gemini AI
 	testContent, err := ktg.generateWithGemini(ctx, prompt, testType)
