@@ -35,7 +35,6 @@ func NewCoverageAnalyzer(coverageFile string) *CoverageAnalyzer {
 		coverageFile: coverageFile,
 	}
 }
-
 // resolveFilePath converts relative paths to absolute paths from repo root
 func (ca *CoverageAnalyzer) resolveFilePath(filePath string) string {
 	// If it's already an absolute path, return as-is
@@ -46,35 +45,45 @@ func (ca *CoverageAnalyzer) resolveFilePath(filePath string) string {
 	// Get current working directory
 	wd, err := os.Getwd()
 	if err != nil {
-		// If we can't get working directory, return the path as-is
 		return filePath
 	}
 	
-	// Check if we're running from scripts/test-generator directory
-	if strings.Contains(wd, "scripts/test-generator") {
-		// We're in scripts/test-generator, so resolve relative to repo root
-		repoRoot := filepath.Join(wd, "..", "..")
-		resolvedPath := filepath.Join(repoRoot, filePath)
-		
-		// Clean the path to resolve any ".." elements
-		cleanPath := filepath.Clean(resolvedPath)
-		return cleanPath
+	// First, try the file path as-is from current directory
+	if fileExists(filePath) {
+		absPath, _ := filepath.Abs(filePath)
+		return absPath
 	}
 	
-	// Check if we're already in the repo root (contains go.mod for kubeedge)
-	if fileExists(filepath.Join(wd, "go.mod")) {
-		// We're in repo root, resolve relative to current directory
-		resolvedPath := filepath.Join(wd, filePath)
+	// Find the repository root by looking for go.mod
+	repoRoot := ca.findRepoRoot(wd)
+	if repoRoot == "" {
+		return filePath
+	}
+	
+	// Try resolving from repo root
+	resolvedPath := filepath.Join(repoRoot, filePath)
+	if fileExists(resolvedPath) {
 		return filepath.Clean(resolvedPath)
 	}
 	
-	// Try to find KubeEdge repo root by looking for go.mod
-	currentDir := wd
+	// If still not found, return the resolved path anyway
+	// (the error will be caught later in AnalyzeFile)
+	return filepath.Clean(resolvedPath)
+}
+
+// findRepoRoot finds the KubeEdge repository root by looking for go.mod
+func (ca *CoverageAnalyzer) findRepoRoot(startDir string) string {
+	currentDir := startDir
+	
 	for i := 0; i < 10; i++ { // Limit search to prevent infinite loop
-		if fileExists(filepath.Join(currentDir, "go.mod")) {
-			// Found repo root
-			resolvedPath := filepath.Join(currentDir, filePath)
-			return filepath.Clean(resolvedPath)
+		// Check if go.mod exists and contains kubeedge
+		goModPath := filepath.Join(currentDir, "go.mod")
+		if fileExists(goModPath) {
+			// Read go.mod to verify it's the KubeEdge repository
+			content, err := os.ReadFile(goModPath)
+			if err == nil && strings.Contains(string(content), "github.com/kubeedge/kubeedge") {
+				return currentDir
+			}
 		}
 		
 		// Go up one level
@@ -86,18 +95,26 @@ func (ca *CoverageAnalyzer) resolveFilePath(filePath string) string {
 		currentDir = parentDir
 	}
 	
-	// If we can't find repo root, return the path as-is
-	return filePath
+	return ""
 }
-// AnalyzeFile checks if a file needs tests based on coverage threshold
+
+// ALSO UPDATE the AnalyzeFile function to have better error handling
 func (ca *CoverageAnalyzer) AnalyzeFile(ctx context.Context, filePath string, threshold float64) (needsTests bool, coverage float64, err error) {
 	// Resolve the file path first
 	resolvedPath := ca.resolveFilePath(filePath)
+	
+	// Check if resolved file exists
+	if !fileExists(resolvedPath) {
+		return false, 0.0, fmt.Errorf("file not found: %s (resolved to: %s)", filePath, resolvedPath)
+	}
+	
+	// Get absolute path
 	absPath, err := filepath.Abs(resolvedPath)
 	if err != nil {
 		return false, 0.0, fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
+	// Rest of the existing function remains the same...
 	// Check if test file already exists
 	testFile := ca.getTestFileName(absPath)
 
@@ -129,11 +146,17 @@ func (ca *CoverageAnalyzer) AnalyzeFile(ctx context.Context, filePath string, th
 	return needsTests, coverage, nil
 }
 
-
-// ExtractModifiedFunctions extracts functions from a Go file that need testing
+// ALSO UPDATE ExtractModifiedFunctions function
 func (ca *CoverageAnalyzer) ExtractModifiedFunctions(ctx context.Context, filePath string) ([]FunctionInfo, error) {
 	// Resolve the file path first
 	resolvedPath := ca.resolveFilePath(filePath)
+	
+	// Check if resolved file exists
+	if !fileExists(resolvedPath) {
+		return nil, fmt.Errorf("file not found: %s (resolved to: %s)", filePath, resolvedPath)
+	}
+	
+	// Get absolute path
 	absPath, err := filepath.Abs(resolvedPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)
@@ -176,6 +199,7 @@ func (ca *CoverageAnalyzer) ExtractModifiedFunctions(ctx context.Context, filePa
 
 	return functions, nil
 }
+
 
 // runKubeEdgeCoverage runs KubeEdge's coverage analysis using make test
 func (ca *CoverageAnalyzer) runKubeEdgeCoverage(ctx context.Context, packageDir string) (float64, error) {
