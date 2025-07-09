@@ -77,6 +77,7 @@ func main() {
 	log.Printf("🔄 Max retry attempts: %d", config.MaxRetryAttempts)
 	log.Printf("🔧 Debug mode: %t", config.Debug)
 	log.Printf("📁 Working directory: %s", getWorkingDir())
+	log.Printf("📧 Email notifications: DISABLED")
 
 	// Initialize services
 	coverageAnalyzer := NewCoverageAnalyzer(config.CoverageFile)
@@ -84,7 +85,7 @@ func main() {
 	defer testGenerator.Close()
 	
 	prCreator := NewPRCreator(config.GithubToken, config.RepoOwner, config.RepoName)
-	emailSender := NewEmailSender(config.RepoOwner, config.RepoName)
+	// REMOVED: emailSender := NewEmailSender(config.RepoOwner, config.RepoName)
 
 	// Check GitHub API rate limits
 	if err := prCreator.CheckRateLimit(ctx); err != nil {
@@ -119,39 +120,138 @@ func main() {
 		}
 	}
 
-	// Send notifications
-	log.Printf("📧 Sending notifications...")
-	
-	// Send success summary if there were successful generations
-	if successCount > 0 {
-		err := emailSender.SendSuccessEmail(ctx, successCount, failureCount, config.PRAuthor, config.PRNumber)
-		if err != nil {
-			log.Printf("⚠️ Failed to send success notification: %v", err)
-		}
-	}
+	// REMOVED: Send notifications section
+	// Print summary instead of sending emails
+	printProcessingSummary(results, successCount, failureCount, config.PRAuthor, config.PRNumber)
 
-	// Send failure notifications for failed files
-	failedFiles := make([]string, 0)
-	for _, result := range results {
-		if !result.Success {
-			failedFiles = append(failedFiles, result.FilePath)
-		}
-	}
-
-	if len(failedFiles) > 0 {
-		err := emailSender.SendFailureEmail(ctx, failedFiles, config.PRAuthor, config.PRNumber)
-		if err != nil {
-			log.Printf("⚠️ Failed to send failure notification: %v", err)
-		}
-	}
+	// Log failure details instead of sending emails
+	logFailureDetails(results, config.PRAuthor, config.PRNumber)
 
 	// Print final summary
 	log.Printf("🎉 KubeEdge Auto Test Generator completed!")
 	log.Printf("📊 Summary: %d successful, %d failed", successCount, failureCount)
 	
+	// Don't exit with error code for failures - just log them
 	if failureCount > 0 {
-		os.Exit(1)
+		log.Printf("⚠️ Some files failed processing - details logged above")
 	}
+}
+
+// printProcessingSummary prints a comprehensive summary of processing results
+func printProcessingSummary(results []ProcessingResult, successCount, failureCount int, prAuthor, prNumber string) {
+	log.Printf("\n" + strings.Repeat("=", 60))
+	log.Printf("📊 PROCESSING SUMMARY")
+	log.Print(strings.Repeat("=", 60))
+	
+	log.Printf("📈 Statistics:")
+	log.Printf("  ✅ Successful: %d files", successCount)
+	log.Printf("  ❌ Failed: %d files", failureCount)
+	log.Printf("  📁 Total processed: %d files", len(results))
+	
+	if len(results) > 0 {
+		successRate := float64(successCount) / float64(len(results)) * 100
+		log.Printf("  📊 Success Rate: %.1f%%", successRate)
+	}
+	
+	if prNumber != "" {
+		log.Printf("  🔗 Original PR: #%s by @%s", prNumber, prAuthor)
+	}
+	
+	log.Printf("  ⏰ Timestamp: %s", time.Now().Format("2006-01-02 15:04:05 UTC"))
+	
+	// Show detailed results
+	if len(results) > 0 {
+		log.Printf("\n📋 Detailed Results:")
+		for i, result := range results {
+			status := "✅ SUCCESS"
+			if !result.Success {
+				status = "❌ FAILED"
+			}
+			
+			log.Printf("  %d. %s %s", i+1, status, result.FilePath)
+			log.Printf("     Coverage: %.1f%% | Duration: %v", result.Coverage, result.Duration.Round(time.Second))
+			
+			if result.Success && result.TestsPRNumber > 0 {
+				log.Printf("     Created test PR #%d", result.TestsPRNumber)
+			} else if !result.Success && result.Error != nil {
+				log.Printf("     Error: %v", result.Error)
+			}
+		}
+	}
+	
+	if successCount > 0 {
+		log.Printf("\n🎯 Generated Test PRs:")
+		log.Printf("  - %d new test PRs created", successCount)
+		log.Printf("  - Review and merge them to improve coverage")
+		log.Printf("  - Target overall coverage: 80%% (per codecov.yml)")
+	}
+	
+	if failureCount > 0 {
+		log.Printf("\n⚠️ Failed Generations:")
+		log.Printf("  - %d files could not have tests auto-generated", failureCount)
+		log.Printf("  - See failure details below")
+		log.Printf("  - These may require manual test creation")
+	}
+	
+	log.Printf(strings.Repeat("=", 60) + "\n")
+}
+
+// logFailureDetails logs detailed information about failed test generations
+func logFailureDetails(results []ProcessingResult, prAuthor, prNumber string) {
+	failedResults := make([]ProcessingResult, 0)
+	for _, result := range results {
+		if !result.Success {
+			failedResults = append(failedResults, result)
+		}
+	}
+	
+	if len(failedResults) == 0 {
+		return
+	}
+	
+	log.Printf("\n" + strings.Repeat("=", 60))
+	log.Printf("🚫 FAILURE ANALYSIS")
+	log.Print(strings.Repeat("=", 60))
+	
+	for i, result := range failedResults {
+		log.Printf("\n❌ FAILURE #%d:", i+1)
+		log.Printf("  📁 File: %s", result.FilePath)
+		log.Printf("  📊 Coverage: %.1f%%", result.Coverage)
+		log.Printf("  ⏱️ Duration: %v", result.Duration.Round(time.Second))
+		log.Printf("  ❗ Error: %v", result.Error)
+		
+		log.Printf("\n  🔍 Likely Causes:")
+		log.Printf("    - File has complex dependencies difficult to mock")
+		log.Printf("    - Code structure doesn't follow standard Go testing patterns")
+		log.Printf("    - Import or dependency issues")
+		log.Printf("    - File requires manual test setup or custom mocking")
+		
+		log.Printf("\n  🔧 Recommended Actions:")
+		log.Printf("    1. Manual Test Creation: Consider creating tests manually")
+		log.Printf("    2. Code Review: Review file structure for testability")
+		log.Printf("    3. Refactoring: Consider refactoring complex functions")
+		log.Printf("    4. Dependencies: Check if external deps need custom mocking")
+	}
+	
+	log.Printf("\n📚 KubeEdge Testing Guidelines:")
+	log.Printf("  - Use gomonkey v2 for mocking external functions")
+	log.Printf("  - Follow table-driven test patterns")
+	log.Printf("  - Use github.com/stretchr/testify/assert for assertions")
+	log.Printf("  - Ensure tests are independent and repeatable")
+	
+	log.Printf("\n🔗 Resources:")
+	log.Printf("  - KubeEdge Testing Documentation: https://github.com/kubeedge/kubeedge/blob/master/docs/testing.md")
+	log.Printf("  - Go Testing Best Practices: https://golang.org/doc/tutorial/add-a-test")
+	log.Printf("  - gomonkey Documentation: https://github.com/agiledragon/gomonkey")
+	
+	if prAuthor != "" {
+		log.Printf("\n👤 PR Author: @%s", prAuthor)
+	}
+	if prNumber != "" {
+		log.Printf("🔗 Original PR: #%s", prNumber)
+	}
+	
+	log.Printf(strings.Repeat("=", 60) + "\n")
 }
 
 // getWorkingDir returns the current working directory for debugging
