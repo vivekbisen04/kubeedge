@@ -392,12 +392,12 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 		return "", fmt.Errorf("empty content generated")
 	}
 
-	fmt.Printf("✅ Successfully extracted %d characters of generated code\n", len(generatedCode))
+	fmt.Printf("Successfully extracted %d characters of generated code\n", len(generatedCode))
 	return generatedCode, nil
 }
 
 // cleanupGeneratedCode cleans and formats the generated test code
-func (ktg *KubeEdgeTestGenerator) cleanupGeneratedCode(content string, packageName string, imports string, testType string) string {
+func (ktg *KubeEdgeTestGenerator) cleanupGeneratedCode(content string, packageName string, _ string, testType string) string {
 	// Remove markdown code blocks if present
 	content = regexp.MustCompile("```go\n?").ReplaceAllString(content, "")
 	content = regexp.MustCompile("```\n?").ReplaceAllString(content, "")

@@ -54,42 +54,41 @@ type ProcessingResult struct {
 
 func main() {
 	config := parseFlags()
-	
+
 	// Validate required configuration
 	if err := validateConfig(config); err != nil {
-		log.Fatalf("❌ Configuration validation failed: %v", err)
+		log.Fatalf("Configuration validation failed: %v", err)
 	}
 
 	// Setup logging
 	if err := setupLogging(config.Debug); err != nil {
-		log.Printf("⚠️ Warning: Failed to setup logging: %v", err)
+		log.Printf("Warning: Failed to setup logging: %v", err)
 	}
 
 	if config.ChangedFiles == "" {
-		log.Println("✅ No changed files to process")
+		log.Println("No changed files to process")
 		return
 	}
 
 	ctx := context.Background()
-	
-	log.Printf("🤖 Starting KubeEdge Auto Test Generator")
-	log.Printf("📊 Coverage threshold: %.1f%%", config.CoverageThreshold)
-	log.Printf("🔄 Max retry attempts: %d", config.MaxRetryAttempts)
-	log.Printf("🔧 Debug mode: %t", config.Debug)
-	log.Printf("📁 Working directory: %s", getWorkingDir())
-	log.Printf("📧 Email notifications: DISABLED")
+
+	log.Printf("Starting KubeEdge Auto Test Generator")
+	log.Printf("Coverage threshold: %.1f%%", config.CoverageThreshold)
+	log.Printf("Max retry attempts: %d", config.MaxRetryAttempts)
+	log.Printf("Debug mode: %t", config.Debug)
+	log.Printf("Working directory: %s", getWorkingDir())
 
 	// Initialize services
 	coverageAnalyzer := NewCoverageAnalyzer(config.CoverageFile)
 	testGenerator := NewKubeEdgeTestGenerator(config.GeminiAPIKey)
 	defer testGenerator.Close()
-	
+
 	prCreator := NewPRCreator(config.GithubToken, config.RepoOwner, config.RepoName)
 	// REMOVED: emailSender := NewEmailSender(config.RepoOwner, config.RepoName)
 
 	// Check GitHub API rate limits
 	if err := prCreator.CheckRateLimit(ctx); err != nil {
-		log.Printf("⚠️ GitHub API rate limit warning: %v", err)
+		log.Printf("GitHub API rate limit warning: %v", err)
 	}
 
 	// Parse changed files
@@ -105,17 +104,17 @@ func main() {
 			continue
 		}
 
-		log.Printf("📁 Processing file: %s", filePath)
+		log.Printf("Processing file: %s", filePath)
 		result := processFile(ctx, filePath, config, coverageAnalyzer, testGenerator, prCreator)
 		results = append(results, result)
 
 		if result.Success {
 			successCount++
-			log.Printf("✅ Successfully processed %s (PR #%d, Duration: %v)", 
+			log.Printf("Successfully processed %s (PR #%d, Duration: %v)",
 				result.FilePath, result.TestsPRNumber, result.Duration)
 		} else {
 			failureCount++
-			log.Printf("❌ Failed to process %s: %v (Duration: %v)", 
+			log.Printf("Failed to process %s: %v (Duration: %v)",
 				result.FilePath, result.Error, result.Duration)
 		}
 	}
@@ -128,9 +127,9 @@ func main() {
 	logFailureDetails(results, config.PRAuthor, config.PRNumber)
 
 	// Print final summary
-	log.Printf("🎉 KubeEdge Auto Test Generator completed!")
-	log.Printf("📊 Summary: %d successful, %d failed", successCount, failureCount)
-	
+	log.Printf("KubeEdge Auto Test Generator completed!")
+	log.Printf("Summary: %d successful, %d failed", successCount, failureCount)
+
 	// Don't exit with error code for failures - just log them
 	if failureCount > 0 {
 		log.Printf("⚠️ Some files failed processing - details logged above")
@@ -140,37 +139,37 @@ func main() {
 // printProcessingSummary prints a comprehensive summary of processing results
 func printProcessingSummary(results []ProcessingResult, successCount, failureCount int, prAuthor, prNumber string) {
 	log.Printf("\n" + strings.Repeat("=", 60))
-	log.Printf("📊 PROCESSING SUMMARY")
+	log.Printf("PROCESSING SUMMARY")
 	log.Print(strings.Repeat("=", 60))
-	
-	log.Printf("📈 Statistics:")
-	log.Printf("  ✅ Successful: %d files", successCount)
-	log.Printf("  ❌ Failed: %d files", failureCount)
-	log.Printf("  📁 Total processed: %d files", len(results))
-	
+
+	log.Printf("Statistics:")
+	log.Printf("Successful: %d files", successCount)
+	log.Printf("Failed: %d files", failureCount)
+	log.Printf("Total processed: %d files", len(results))
+
 	if len(results) > 0 {
 		successRate := float64(successCount) / float64(len(results)) * 100
-		log.Printf("  📊 Success Rate: %.1f%%", successRate)
+		log.Printf("  Success Rate: %.1f%%", successRate)
 	}
-	
+
 	if prNumber != "" {
-		log.Printf("  🔗 Original PR: #%s by @%s", prNumber, prAuthor)
+		log.Printf("  Original PR: #%s by @%s", prNumber, prAuthor)
 	}
-	
-	log.Printf("  ⏰ Timestamp: %s", time.Now().Format("2006-01-02 15:04:05 UTC"))
-	
+
+	log.Printf("  Timestamp: %s", time.Now().Format("2006-01-02 15:04:05 UTC"))
+
 	// Show detailed results
 	if len(results) > 0 {
-		log.Printf("\n📋 Detailed Results:")
+		log.Printf("\nDetailed Results:")
 		for i, result := range results {
-			status := "✅ SUCCESS"
+			status := "SUCCESS"
 			if !result.Success {
-				status = "❌ FAILED"
+				status = "FAILED"
 			}
-			
+
 			log.Printf("  %d. %s %s", i+1, status, result.FilePath)
 			log.Printf("     Coverage: %.1f%% | Duration: %v", result.Coverage, result.Duration.Round(time.Second))
-			
+
 			if result.Success && result.TestsPRNumber > 0 {
 				log.Printf("     Created test PR #%d", result.TestsPRNumber)
 			} else if !result.Success && result.Error != nil {
@@ -178,21 +177,21 @@ func printProcessingSummary(results []ProcessingResult, successCount, failureCou
 			}
 		}
 	}
-	
+
 	if successCount > 0 {
-		log.Printf("\n🎯 Generated Test PRs:")
+		log.Printf("\nGenerated Test PRs:")
 		log.Printf("  - %d new test PRs created", successCount)
 		log.Printf("  - Review and merge them to improve coverage")
 		log.Printf("  - Target overall coverage: 80%% (per codecov.yml)")
 	}
-	
+
 	if failureCount > 0 {
-		log.Printf("\n⚠️ Failed Generations:")
+		log.Printf("\nFailed Generations:")
 		log.Printf("  - %d files could not have tests auto-generated", failureCount)
 		log.Printf("  - See failure details below")
 		log.Printf("  - These may require manual test creation")
 	}
-	
+
 	log.Printf(strings.Repeat("=", 60) + "\n")
 }
 
@@ -204,53 +203,53 @@ func logFailureDetails(results []ProcessingResult, prAuthor, prNumber string) {
 			failedResults = append(failedResults, result)
 		}
 	}
-	
+
 	if len(failedResults) == 0 {
 		return
 	}
-	
+
 	log.Printf("\n" + strings.Repeat("=", 60))
-	log.Printf("🚫 FAILURE ANALYSIS")
+	log.Printf("FAILURE ANALYSIS")
 	log.Print(strings.Repeat("=", 60))
-	
+
 	for i, result := range failedResults {
-		log.Printf("\n❌ FAILURE #%d:", i+1)
-		log.Printf("  📁 File: %s", result.FilePath)
-		log.Printf("  📊 Coverage: %.1f%%", result.Coverage)
-		log.Printf("  ⏱️ Duration: %v", result.Duration.Round(time.Second))
-		log.Printf("  ❗ Error: %v", result.Error)
-		
-		log.Printf("\n  🔍 Likely Causes:")
+		log.Printf("\nFAILURE #%d:", i+1)
+		log.Printf("  File: %s", result.FilePath)
+		log.Printf("  Coverage: %.1f%%", result.Coverage)
+		log.Printf("  Duration: %v", result.Duration.Round(time.Second))
+		log.Printf("  Error: %v", result.Error)
+
+		log.Printf("\n  Likely Causes:")
 		log.Printf("    - File has complex dependencies difficult to mock")
 		log.Printf("    - Code structure doesn't follow standard Go testing patterns")
 		log.Printf("    - Import or dependency issues")
 		log.Printf("    - File requires manual test setup or custom mocking")
-		
-		log.Printf("\n  🔧 Recommended Actions:")
+
+		log.Printf("\n  Recommended Actions:")
 		log.Printf("    1. Manual Test Creation: Consider creating tests manually")
 		log.Printf("    2. Code Review: Review file structure for testability")
 		log.Printf("    3. Refactoring: Consider refactoring complex functions")
 		log.Printf("    4. Dependencies: Check if external deps need custom mocking")
 	}
-	
-	log.Printf("\n📚 KubeEdge Testing Guidelines:")
+
+	log.Printf("\nKubeEdge Testing Guidelines:")
 	log.Printf("  - Use gomonkey v2 for mocking external functions")
 	log.Printf("  - Follow table-driven test patterns")
 	log.Printf("  - Use github.com/stretchr/testify/assert for assertions")
 	log.Printf("  - Ensure tests are independent and repeatable")
-	
-	log.Printf("\n🔗 Resources:")
+
+	log.Printf("\nResources:")
 	log.Printf("  - KubeEdge Testing Documentation: https://github.com/kubeedge/kubeedge/blob/master/docs/testing.md")
 	log.Printf("  - Go Testing Best Practices: https://golang.org/doc/tutorial/add-a-test")
 	log.Printf("  - gomonkey Documentation: https://github.com/agiledragon/gomonkey")
-	
+
 	if prAuthor != "" {
-		log.Printf("\n👤 PR Author: @%s", prAuthor)
+		log.Printf("\nPR Author: @%s", prAuthor)
 	}
 	if prNumber != "" {
-		log.Printf("🔗 Original PR: #%s", prNumber)
+		log.Printf("Original PR: #%s", prNumber)
 	}
-	
+
 	log.Printf(strings.Repeat("=", 60) + "\n")
 }
 
@@ -264,9 +263,9 @@ func getWorkingDir() string {
 }
 
 // processFile processes a single Go file for test generation
-func processFile(ctx context.Context, filePath string, config *Config, 
+func processFile(ctx context.Context, filePath string, config *Config,
 	analyzer *CoverageAnalyzer, generator *KubeEdgeTestGenerator, creator *PRCreator) ProcessingResult {
-	
+
 	startTime := time.Now()
 	result := ProcessingResult{
 		FilePath: filePath,
@@ -285,10 +284,10 @@ func processFile(ctx context.Context, filePath string, config *Config,
 	}
 
 	result.Coverage = coverage
-	log.Printf("📊 Coverage for %s: %.2f%% (needs tests: %v)", filePath, coverage, needsTests)
+	log.Printf("Coverage for %s: %.2f%% (needs tests: %v)", filePath, coverage, needsTests)
 
 	if !needsTests {
-		log.Printf("✅ %s has sufficient coverage (%.2f%%), skipping", filePath, coverage)
+		log.Printf("%s has sufficient coverage (%.2f%%), skipping", filePath, coverage)
 		result.Success = true
 		return result
 	}
@@ -301,7 +300,7 @@ func processFile(ctx context.Context, filePath string, config *Config,
 	}
 
 	if len(functions) == 0 {
-		log.Printf("⚠️ No testable functions found in %s", filePath)
+		log.Printf("No testable functions found in %s", filePath)
 		result.Success = true
 		return result
 	}
@@ -328,34 +327,34 @@ func processFile(ctx context.Context, filePath string, config *Config,
 }
 
 // generateTestsWithRetry attempts to generate tests with retry logic
-func generateTestsWithRetry(ctx context.Context, filePath string, functions []FunctionInfo, 
+func generateTestsWithRetry(ctx context.Context, filePath string, functions []FunctionInfo,
 	generator *KubeEdgeTestGenerator, maxAttempts int) (string, bool) {
-	
+
 	var lastError error
-	
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		log.Printf("🤖 Generating tests for %s (attempt %d/%d)", filePath, attempt, maxAttempts)
-		
+		log.Printf("Generating tests for %s (attempt %d/%d)", filePath, attempt, maxAttempts)
+
 		// Call LLM
 		testContent, err := generator.GenerateTests(ctx, filePath, functions, lastError)
 		if err != nil {
 			lastError = err
-			log.Printf("⚠️ Generation failed (attempt %d): %v", attempt, err)
+			log.Printf("Generation failed (attempt %d): %v", attempt, err)
 			continue
 		}
-		
-		log.Printf("✅ Generated test content (attempt %d)", attempt)
-		
+
+		log.Printf("Generated test content (attempt %d)", attempt)
+
 		// Simple validation: check if generated content looks like Go code
 		if isValidGoTestContent(testContent) {
-			log.Printf("🎉 Tests generated successfully for %s", filePath)
+			log.Printf("Tests generated successfully for %s", filePath)
 			return testContent, true
 		}
-		
+
 		lastError = fmt.Errorf("generated content doesn't look like valid Go test code")
-		log.Printf("⚠️ Validation failed (attempt %d): %v", attempt, lastError)
+		log.Printf("Validation failed (attempt %d): %v", attempt, lastError)
 	}
-	
+
 	log.Printf("❌ All %d attempts failed for %s", maxAttempts, filePath)
 	return "", false
 }
@@ -369,7 +368,7 @@ func isValidGoTestContent(content string) bool {
 		"func Test",
 		"testing",
 	}
-	
+
 	for _, check := range checks {
 		if !strings.Contains(content, check) {
 			return false
@@ -380,7 +379,7 @@ func isValidGoTestContent(content string) bool {
 
 func parseFlags() *Config {
 	config := &Config{}
-	
+
 	flag.StringVar(&config.PRNumber, "pr-number", "", "Pull request number")
 	flag.StringVar(&config.ChangedFiles, "changed-files", "", "Newline-separated list of changed files")
 	flag.StringVar(&config.RepoOwner, "repo-owner", "kubeedge", "Repository owner")
@@ -392,7 +391,7 @@ func parseFlags() *Config {
 	flag.StringVar(&config.PRAuthor, "pr-author", "", "PR author username")
 	flag.StringVar(&config.CoverageFile, "coverage-file", "", "Path to coverage file (optional)")
 	flag.BoolVar(&config.Debug, "debug", strings.ToLower(os.Getenv("DEBUG")) == "true", "Enable debug logging")
-	
+
 	flag.Parse()
 	return config
 }
@@ -424,20 +423,20 @@ func setupLogging(debug bool) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
-	
-	logFile := filepath.Join(logDir, fmt.Sprintf("test-generator-%s.log", 
+
+	logFile := filepath.Join(logDir, fmt.Sprintf("test-generator-%s.log",
 		time.Now().Format("2006-01-02-15-04-05")))
-	
+
 	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return err
 	}
-	
+
 	log.SetOutput(file)
-	
+
 	if debug {
-		log.Printf("🔧 Debug logging enabled")
+		log.Printf("Debug logging enabled")
 	}
-	
+
 	return nil
 }

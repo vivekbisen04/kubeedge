@@ -88,7 +88,7 @@ func (pc *PRCreator) createNewTestFile(ctx context.Context, sourceFile, testFile
 	}
 
 	// Create pull request
-	prTitle := fmt.Sprintf("🤖 Add auto-generated tests for %s", filepath.Base(sourceFile))
+	prTitle := fmt.Sprintf("Add auto-generated tests for %s", filepath.Base(sourceFile))
 	prBody := pc.buildPRDescription(sourceFile, coverage, false)
 
 	pr := &github.NewPullRequest{
@@ -107,7 +107,7 @@ func (pc *PRCreator) createNewTestFile(ctx context.Context, sourceFile, testFile
 	labels := []string{"auto-generated", "tests", "low-coverage"}
 	_, _, err = pc.client.Issues.AddLabelsToIssue(ctx, pc.repoOwner, pc.repoName, createdPR.GetNumber(), labels)
 	if err != nil {
-		fmt.Printf("⚠️ Warning: Failed to add labels to PR: %v\n", err)
+		fmt.Printf("Warning: Failed to add labels to PR: %v\n", err)
 	}
 
 	// Add reviewers (get from OWNERS file)
@@ -118,11 +118,11 @@ func (pc *PRCreator) createNewTestFile(ctx context.Context, sourceFile, testFile
 		}
 		_, _, err = pc.client.PullRequests.RequestReviewers(ctx, pc.repoOwner, pc.repoName, createdPR.GetNumber(), *reviewersRequest)
 		if err != nil {
-			fmt.Printf("⚠️ Warning: Failed to add reviewers to PR: %v\n", err)
+			fmt.Printf("Warning: Failed to add reviewers to PR: %v\n", err)
 		}
 	}
 
-	fmt.Printf("✅ Created PR #%d: %s\n", createdPR.GetNumber(), prTitle)
+	fmt.Printf("Created PR #%d: %s\n", createdPR.GetNumber(), prTitle)
 	return nil
 }
 
@@ -177,7 +177,7 @@ func (pc *PRCreator) updateExistingTestFile(ctx context.Context, sourceFile, tes
 	}
 
 	// Create pull request
-	prTitle := fmt.Sprintf("🤖 Update auto-generated tests for %s", filepath.Base(sourceFile))
+	prTitle := fmt.Sprintf("Update auto-generated tests for %s", filepath.Base(sourceFile))
 	prBody := pc.buildPRDescription(sourceFile, coverage, true)
 
 	pr := &github.NewPullRequest{
@@ -192,7 +192,7 @@ func (pc *PRCreator) updateExistingTestFile(ctx context.Context, sourceFile, tes
 		return fmt.Errorf("failed to create pull request: %v", err)
 	}
 
-	fmt.Printf("✅ Created update PR #%d: %s\n", createdPR.GetNumber(), prTitle)
+	fmt.Printf("Created update PR #%d: %s\n", createdPR.GetNumber(), prTitle)
 	return nil
 }
 
@@ -276,52 +276,30 @@ func (pc *PRCreator) buildPRDescription(sourceFile string, coverage float64, isU
 	var body strings.Builder
 
 	if isUpdate {
-		body.WriteString("## 🤖 Auto-Generated Test Updates\n\n")
+		body.WriteString("## Auto-Generated Test Updates\n\n")
 		body.WriteString(fmt.Sprintf("This PR contains automatically generated test updates for `%s`.\n\n", sourceFile))
 	} else {
-		body.WriteString("## 🤖 Auto-Generated Unit Tests\n\n")
+		body.WriteString("## Auto-Generated Unit Tests\n\n")
 		body.WriteString(fmt.Sprintf("This PR contains automatically generated unit tests for `%s`.\n\n", sourceFile))
 	}
 
-	body.WriteString("### 📊 Coverage Information\n")
+	body.WriteString("### Coverage Information\n")
 	body.WriteString(fmt.Sprintf("- **Original Coverage**: %.2f%%\n", coverage))
 	body.WriteString("- **Coverage Threshold**: 40.00%%\n")
 	if coverage < 40.0 {
-		body.WriteString("- **Status**: ⚠️ Below threshold, tests generated\n\n")
+		body.WriteString("- **Status**: Below threshold, tests generated\n\n")
 	} else {
-		body.WriteString("- **Status**: ℹ️ Additional tests generated for improved coverage\n\n")
+		body.WriteString("- **Status**: Additional tests generated for improved coverage\n\n")
 	}
 
-	body.WriteString("### 🧪 Generated Tests Include\n")
-	body.WriteString("- ✅ Basic functionality tests\n")
-	body.WriteString("- ✅ Edge case handling\n")
-	body.WriteString("- ✅ Error condition testing\n")
-	body.WriteString("- ✅ Input validation tests\n")
-	body.WriteString("- ✅ gomonkey mocking (where applicable)\n")
-	body.WriteString("- ✅ KubeEdge-specific patterns\n\n")
-
-	body.WriteString("### 🔧 Testing Framework\n")
-	body.WriteString("- **Primary**: Standard Go testing with `testify/assert`\n")
-	body.WriteString("- **Mocking**: gomonkey v2 (following KubeEdge patterns)\n")
-	body.WriteString("- **Structure**: Table-driven tests where appropriate\n\n")
-
-	body.WriteString("### ✅ Review Checklist\n")
-	body.WriteString("- [ ] Tests cover the main functionality\n")
-	body.WriteString("- [ ] Tests include proper error handling\n")
-	body.WriteString("- [ ] Test names are descriptive\n")
-	body.WriteString("- [ ] Tests are independent and repeatable\n")
-	body.WriteString("- [ ] gomonkey mocking follows KubeEdge patterns\n")
-	body.WriteString("- [ ] No hardcoded values in tests\n")
-	body.WriteString("- [ ] Tests compile and pass successfully\n\n")
-
-	body.WriteString("### 🔧 Next Steps\n")
+	body.WriteString("### Next Steps\n")
 	body.WriteString("1. Review the generated tests for accuracy\n")
 	body.WriteString("2. Run `make test PROFILE=y` to verify all tests pass\n")
 	body.WriteString("3. Modify or add additional tests if needed\n")
 	body.WriteString("4. Check coverage improvement with `make test PROFILE=y`\n")
 	body.WriteString("5. Merge when tests are satisfactory\n\n")
 
-	body.WriteString("### 🤖 Generation Details\n")
+	body.WriteString("### eneration Details\n")
 	body.WriteString("- **Generator**: KubeEdge Auto Test Generator\n")
 	body.WriteString("- **LLM**: Gemini 1.5 Flash\n")
 	body.WriteString("- **Validation**: Simplified mode (no Docker validation)\n")
@@ -450,17 +428,17 @@ func (pc *PRCreator) AddSuccessComment(ctx context.Context, prNumber string, sou
 		return nil
 	}
 
-	message := fmt.Sprintf(`🎉 **Auto Test Generation Successful!**
+	message := fmt.Sprintf(`**Auto Test Generation Successful!**
 
-✅ Successfully generated tests for %s
+Successfully generated tests for %s
 
-📋 **Details:**
+**Details:**
 - Generated comprehensive unit tests
 - Validated for basic Go syntax
 - Following KubeEdge testing patterns
 - Created PR #%d with the generated tests
 
-🔗 **Next Steps:**
+**Next Steps:**
 - Review the generated tests in PR #%d
 - Tests are ready for review and merge
 
@@ -479,16 +457,16 @@ func (pc *PRCreator) AddFailureComment(ctx context.Context, prNumber string, sou
 
 Failed to generate tests for `+"`%s`"+` after %d attempts.
 
-🔍 **Last Error:**
+**Last Error:**
 `+"```"+`
 %v
 `+"```"+`
 
-📧 **Notification Sent:**
+**Notification Sent:**
 - Repository maintainers have been notified via GitHub issue
 - Manual test creation may be required for this file
 
-💡 **Suggestions:**
+**Suggestions:**
 - File may have complex dependencies requiring manual mocking
 - Consider adding tests manually following KubeEdge patterns
 - Check if the file needs refactoring for better testability
@@ -512,7 +490,7 @@ func (pc *PRCreator) CheckRateLimit(ctx context.Context) error {
 			core.Remaining, resetTime)
 	}
 
-	fmt.Printf("📊 GitHub API rate limit: %d/%d remaining\n", core.Remaining, core.Limit)
+	fmt.Printf("GitHub API rate limit: %d/%d remaining\n", core.Remaining, core.Limit)
 	return nil
 }
 
@@ -530,13 +508,13 @@ func (pc *PRCreator) CreateTestsPR(ctx context.Context, sourceFile string, testC
 	// Generate test file name and branch name
 	testFile := pc.generateTestFileName(sourceFile)
 	branchName := pc.generateBranchName(sourceFile)
-	
+
 	// Create the PR using existing method
 	err := pc.CreateTestPR(ctx, sourceFile, testFile, testContent, branchName, coverage)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	// Since CreateTestPR doesn't return PR number, we need to get it
 	// For now, return 0 to indicate success (the method logs the actual PR number)
 	return 0, nil
