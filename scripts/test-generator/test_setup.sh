@@ -19,8 +19,8 @@ echo "✅ In KubeEdge repository root"
 
 # Set required environment variables
 echo "🔑 Setting up environment variables..."
-export GEMINI_API_KEY="api"  # Replace with your actual key
-export GITHUB_TOKEN="token"       # Optional for local testing
+export GEMINI_API_KEY="your-gemini-api-key-here"  # Replace with your actual key
+export GITHUB_TOKEN="your-github-token-here"       # Optional for local testing
 
 if [ -z "$GEMINI_API_KEY" ] || [ "$GEMINI_API_KEY" = "your-gemini-api-key-here" ]; then
     echo "❌ Please set your GEMINI_API_KEY first:"
