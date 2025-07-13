@@ -21,12 +21,16 @@ type CoverageAnalyzer struct {
 }
 
 type FunctionInfo struct {
-	Name       string
-	Content    string
-	StartLine  int
-	EndLine    int
-	IsExported bool
-	HasTests   bool
+	Name        string
+	Content     string
+	StartLine   int
+	EndLine     int
+	IsExported  bool
+	HasTests    bool
+	Signature   string
+	Parameters  []string
+	ReturnTypes []string
+	Complexity  int
 }
 
 func NewCoverageAnalyzer(coverageFile string) *CoverageAnalyzer {
@@ -35,6 +39,7 @@ func NewCoverageAnalyzer(coverageFile string) *CoverageAnalyzer {
 		coverageFile: coverageFile,
 	}
 }
+
 // resolveFilePath converts relative paths to absolute paths from repo root
 func (ca *CoverageAnalyzer) resolveFilePath(filePath string) string {
 	// If it's already an absolute path, return as-is
@@ -98,7 +103,7 @@ func (ca *CoverageAnalyzer) findRepoRoot(startDir string) string {
 	return ""
 }
 
-// ALSO UPDATE the AnalyzeFile function to have better error handling
+// AnalyzeFile analyzes coverage for a specific file
 func (ca *CoverageAnalyzer) AnalyzeFile(ctx context.Context, filePath string, threshold float64) (needsTests bool, coverage float64, err error) {
 	// Resolve the file path first
 	resolvedPath := ca.resolveFilePath(filePath)
@@ -114,7 +119,6 @@ func (ca *CoverageAnalyzer) AnalyzeFile(ctx context.Context, filePath string, th
 		return false, 0.0, fmt.Errorf("failed to get absolute path: %v", err)
 	}
 
-	// Rest of the existing function remains the same...
 	// Check if test file already exists
 	testFile := ca.getTestFileName(absPath)
 
@@ -146,7 +150,7 @@ func (ca *CoverageAnalyzer) AnalyzeFile(ctx context.Context, filePath string, th
 	return needsTests, coverage, nil
 }
 
-// ALSO UPDATE ExtractModifiedFunctions function
+// ExtractModifiedFunctions extracts functions from a modified file
 func (ca *CoverageAnalyzer) ExtractModifiedFunctions(ctx context.Context, filePath string) ([]FunctionInfo, error) {
 	// Resolve the file path first
 	resolvedPath := ca.resolveFilePath(filePath)
@@ -168,29 +172,34 @@ func (ca *CoverageAnalyzer) ExtractModifiedFunctions(ctx context.Context, filePa
 		return nil, fmt.Errorf("failed to read file: %v", err)
 	}
 
-	// Parse the Go file
-	node, err := parser.ParseFile(ca.fileSet, absPath, content, parser.ParseComments)
+	// Use the extractFunctionsFromContent method
+	return ca.extractFunctionsFromContent(string(content), absPath)
+}
+
+// extractFunctionsFromContent extracts functions from Go source code content
+func (ca *CoverageAnalyzer) extractFunctionsFromContent(content, filePath string) ([]FunctionInfo, error) {
+	// Parse the Go source code
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, filePath, content, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse file: %v", err)
+		return nil, fmt.Errorf("failed to parse Go source: %v", err)
 	}
 
 	var functions []FunctionInfo
-	lines := strings.Split(string(content), "\n")
+	lines := strings.Split(content, "\n")
 
 	// Check if test file exists to determine which functions already have tests
-	testFile := ca.getTestFileName(absPath)
+	testFile := ca.getTestFileName(filePath)
 	existingTests := ca.getExistingTestFunctions(testFile)
 
-	// Extract all functions
+	// Walk the AST to find function declarations
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch fn := n.(type) {
 		case *ast.FuncDecl:
 			if fn.Name != nil && ca.shouldIncludeFunction(fn) {
-				funcInfo := ca.extractFunctionInfo(fn, lines)
-
-				// Check if this function already has tests
+				funcInfo := ca.extractFunctionInfo(fn, lines, fset)
 				funcInfo.HasTests = ca.hasExistingTests(fn.Name.Name, existingTests)
-
+				funcInfo.Complexity = ca.calculateComplexity(fn)
 				functions = append(functions, funcInfo)
 			}
 		}
@@ -200,6 +209,215 @@ func (ca *CoverageAnalyzer) ExtractModifiedFunctions(ctx context.Context, filePa
 	return functions, nil
 }
 
+// shouldIncludeFunction determines if a function should be included for testing
+func (ca *CoverageAnalyzer) shouldIncludeFunction(fn *ast.FuncDecl) bool {
+	if fn.Name == nil {
+		return false
+	}
+
+	funcName := fn.Name.Name
+
+	// Skip init functions
+	if funcName == "init" {
+		return false
+	}
+
+	// Skip main function
+	if funcName == "main" {
+		return false
+	}
+
+	// Skip test functions
+	if strings.HasPrefix(funcName, "Test") || 
+	   strings.HasPrefix(funcName, "Benchmark") || 
+	   strings.HasPrefix(funcName, "Example") {
+		return false
+	}
+
+	// Skip functions with build tags or special comments that indicate they shouldn't be tested
+	if fn.Doc != nil {
+		for _, comment := range fn.Doc.List {
+			if strings.Contains(comment.Text, "// +build") ||
+			   strings.Contains(comment.Text, "//go:build") ||
+			   strings.Contains(comment.Text, "// TODO") ||
+			   strings.Contains(comment.Text, "// FIXME") ||
+			   strings.Contains(comment.Text, "// Deprecated") {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// extractFunctionInfo extracts detailed information about a function
+func (ca *CoverageAnalyzer) extractFunctionInfo(fn *ast.FuncDecl, lines []string, fset *token.FileSet) FunctionInfo {
+	funcName := fn.Name.Name
+	
+	// Determine if function is exported
+	isExported := ast.IsExported(funcName)
+	
+	// Extract function content
+	startPos := fset.Position(fn.Pos())
+	endPos := fset.Position(fn.End())
+	
+	var content strings.Builder
+	for i := startPos.Line - 1; i < endPos.Line && i < len(lines); i++ {
+		content.WriteString(lines[i])
+		if i < endPos.Line-1 {
+			content.WriteString("\n")
+		}
+	}
+
+	// Extract function signature for better context
+	signature := ca.extractFunctionSignature(fn)
+
+	// Extract parameters
+	var parameters []string
+	if fn.Type.Params != nil {
+		for _, param := range fn.Type.Params.List {
+			for _, name := range param.Names {
+				parameters = append(parameters, name.Name)
+			}
+		}
+	}
+
+	// Extract return types
+	var returnTypes []string
+	if fn.Type.Results != nil {
+		for _, result := range fn.Type.Results.List {
+			returnTypes = append(returnTypes, ca.typeToString(result.Type))
+		}
+	}
+
+	return FunctionInfo{
+		Name:        funcName,
+		IsExported:  isExported,
+		Content:     content.String(),
+		Signature:   signature,
+		Parameters:  parameters,
+		ReturnTypes: returnTypes,
+		StartLine:   startPos.Line,
+		EndLine:     endPos.Line,
+		HasTests:    false, // Will be determined later if needed
+	}
+}
+
+// extractFunctionSignature creates a readable function signature
+func (ca *CoverageAnalyzer) extractFunctionSignature(fn *ast.FuncDecl) string {
+	var sig strings.Builder
+	
+	sig.WriteString("func ")
+	
+	// Add receiver if it's a method
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		sig.WriteString("(")
+		for i, recv := range fn.Recv.List {
+			if i > 0 {
+				sig.WriteString(", ")
+			}
+			if len(recv.Names) > 0 {
+				sig.WriteString(recv.Names[0].Name + " ")
+			}
+			sig.WriteString(ca.typeToString(recv.Type))
+		}
+		sig.WriteString(") ")
+	}
+	
+	sig.WriteString(fn.Name.Name)
+	
+	// Add parameters
+	sig.WriteString("(")
+	if fn.Type.Params != nil {
+		for i, param := range fn.Type.Params.List {
+			if i > 0 {
+				sig.WriteString(", ")
+			}
+			
+			for j, name := range param.Names {
+				if j > 0 {
+					sig.WriteString(", ")
+				}
+				sig.WriteString(name.Name)
+			}
+			
+			if len(param.Names) > 0 {
+				sig.WriteString(" ")
+			}
+			sig.WriteString(ca.typeToString(param.Type))
+		}
+	}
+	sig.WriteString(")")
+	
+	// Add return types
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		sig.WriteString(" ")
+		if len(fn.Type.Results.List) > 1 {
+			sig.WriteString("(")
+		}
+		
+		for i, result := range fn.Type.Results.List {
+			if i > 0 {
+				sig.WriteString(", ")
+			}
+			sig.WriteString(ca.typeToString(result.Type))
+		}
+		
+		if len(fn.Type.Results.List) > 1 {
+			sig.WriteString(")")
+		}
+	}
+	
+	return sig.String()
+}
+
+// typeToString converts an AST type to a string representation
+func (ca *CoverageAnalyzer) typeToString(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		return ca.typeToString(t.X) + "." + t.Sel.Name
+	case *ast.StarExpr:
+		return "*" + ca.typeToString(t.X)
+	case *ast.ArrayType:
+		return "[]" + ca.typeToString(t.Elt)
+	case *ast.MapType:
+		return "map[" + ca.typeToString(t.Key) + "]" + ca.typeToString(t.Value)
+	case *ast.ChanType:
+		prefix := "chan"
+		if t.Dir == ast.SEND {
+			prefix = "chan<-"
+		} else if t.Dir == ast.RECV {
+			prefix = "<-chan"
+		}
+		return prefix + " " + ca.typeToString(t.Value)
+	case *ast.InterfaceType:
+		return "interface{}"
+	case *ast.FuncType:
+		return "func(...)"
+	default:
+		return "unknown"
+	}
+}
+
+// calculateComplexity calculates cyclomatic complexity of a function
+func (ca *CoverageAnalyzer) calculateComplexity(fn *ast.FuncDecl) int {
+	complexity := 1 // Base complexity
+
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, 
+		     *ast.TypeSwitchStmt, *ast.SelectStmt:
+			complexity++
+		case *ast.CaseClause:
+			complexity++
+		}
+		return true
+	})
+
+	return complexity
+}
 
 // runKubeEdgeCoverage runs KubeEdge's coverage analysis using make test
 func (ca *CoverageAnalyzer) runKubeEdgeCoverage(ctx context.Context, packageDir string) (float64, error) {
@@ -345,64 +563,6 @@ func (ca *CoverageAnalyzer) parseCoverageFromFile(filePath string) (float64, err
 	return coverage, nil
 }
 
-// shouldIncludeFunction determines if a function should be included for testing
-func (ca *CoverageAnalyzer) shouldIncludeFunction(fn *ast.FuncDecl) bool {
-	if fn.Name == nil {
-		return false
-	}
-
-	funcName := fn.Name.Name
-
-	// Skip main functions
-	if funcName == "main" {
-		return false
-	}
-
-	// Skip init functions
-	if funcName == "init" {
-		return false
-	}
-
-	// Skip test functions
-	if strings.HasPrefix(funcName, "Test") || strings.HasPrefix(funcName, "Benchmark") || strings.HasPrefix(funcName, "Example") {
-		return false
-	}
-
-	// Include exported functions
-	if fn.Name.IsExported() {
-		return true
-	}
-
-	// Include unexported functions that have significant logic
-	if fn.Body != nil && len(fn.Body.List) > 1 {
-		return true
-	}
-
-	return false
-}
-
-// extractFunctionInfo extracts detailed information about a function
-func (ca *CoverageAnalyzer) extractFunctionInfo(fn *ast.FuncDecl, lines []string) FunctionInfo {
-	startPos := ca.fileSet.Position(fn.Pos())
-	endPos := ca.fileSet.Position(fn.End())
-
-	// Extract function content
-	var funcContent strings.Builder
-	for i := startPos.Line - 1; i < endPos.Line && i < len(lines); i++ {
-		funcContent.WriteString(lines[i])
-		funcContent.WriteString("\n")
-	}
-
-	return FunctionInfo{
-		Name:       fn.Name.Name,
-		Content:    funcContent.String(),
-		StartLine:  startPos.Line,
-		EndLine:    endPos.Line,
-		IsExported: fn.Name.IsExported(),
-		HasTests:   false, // Will be set by caller
-	}
-}
-
 // getTestFileName returns the corresponding test file name
 func (ca *CoverageAnalyzer) getTestFileName(sourceFile string) string {
 	dir := filepath.Dir(sourceFile)
@@ -425,7 +585,8 @@ func (ca *CoverageAnalyzer) getExistingTestFunctions(testFile string) map[string
 	}
 
 	// Parse test file to find existing test functions
-	node, err := parser.ParseFile(ca.fileSet, testFile, content, parser.ParseComments)
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, testFile, content, parser.ParseComments)
 	if err != nil {
 		return tests
 	}

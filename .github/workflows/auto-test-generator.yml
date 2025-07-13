@@ -3,11 +3,16 @@ name: KubeEdge Auto Test Generator
 on:
   pull_request_target:
     types: [closed]
+    paths:
+      - '**/*.go'
+      - '!**/*_test.go'
     paths-ignore:
       - "**.md"
       - "docs/**"
       - "**/OWNERS"
       - "**/MAINTAINERS"
+      - "vendor/**"
+      - "hack/**"
 
 env:
   COVERAGE_THRESHOLD: 40.0
@@ -15,16 +20,14 @@ env:
 
 jobs:
   auto-test-generator:
-    # Only run on merged PRs to your fork repository
     if: github.event.pull_request.merged == true && github.repository == 'vivekbisen04/kubeedge'
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    name: Generate Tests for Low Coverage Files
+    timeout-minutes: 45
+    name: Generate Unit Tests for Low Coverage Files
 
     permissions:
       contents: write
       pull-requests: write
-      # Removed: issues: write (no longer creating issues)
       actions: read
 
     steps:
@@ -37,12 +40,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.23"
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+          go-version: "1.22.x"
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -50,188 +48,326 @@ jobs:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
-      - name: Get merged PR information
-        id: pr_info
+      - name: Get merged PR files and analyze coverage
+        id: coverage_check
         run: |
-          # Get PR number and changed files
+          set -e
+          
+          echo "🔍 Analyzing merged PR files for coverage..."
+          
           PR_NUMBER="${{ github.event.pull_request.number }}"
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.go$' | grep -v '_test\.go$' | grep -v 'vendor/' | grep -v 'hack/' || echo "")
+          
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-
-          # Get files changed in the merged PR (only .go files, exclude tests)
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.go$' | grep -v '_test\.go$' || echo "")
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          # Get PR author for notifications
-          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
-          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
-
-          echo "🔍 Found changed files:"
+          echo "pr_author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No Go files to analyze"
+            echo "files_to_process=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "📁 Changed Go files:"
           echo "$CHANGED_FILES"
+          
+          LOW_COVERAGE_FILES=""
+          
+          for file in $CHANGED_FILES; do
+            if [ ! -f "$file" ]; then
+              echo "⚠️ File $file not found, skipping"
+              continue
+            fi
+            
+            echo "🧮 Checking coverage for $file..."
+            
+            PKG_DIR=$(dirname "$file")
+            
+            if go test -coverprofile=temp_coverage.out "./$PKG_DIR" 2>/dev/null; then
+              if [ -f "temp_coverage.out" ]; then
+                FILE_COVERAGE=$(go tool cover -func=temp_coverage.out | grep "$(basename "$file")" | awk '{print $3}' | sed 's/%//' || echo "0")
+                
+                if [ -z "$FILE_COVERAGE" ]; then
+                  FILE_COVERAGE="0"
+                fi
+                
+                echo "📊 $file: ${FILE_COVERAGE}% coverage"
+                
+                if (( $(echo "$FILE_COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+                  echo "⚠️ $file is below ${COVERAGE_THRESHOLD}% threshold"
+                  LOW_COVERAGE_FILES="$LOW_COVERAGE_FILES$file\n"
+                else
+                  echo "✅ $file has sufficient coverage (${FILE_COVERAGE}%)"
+                fi
+              else
+                echo "⚠️ No coverage data for $file, assuming it needs tests"
+                LOW_COVERAGE_FILES="$LOW_COVERAGE_FILES$file\n"
+              fi
+            else
+              echo "⚠️ Could not run tests for $file, assuming it needs tests"
+              LOW_COVERAGE_FILES="$LOW_COVERAGE_FILES$file\n"
+            fi
+            
+            rm -f temp_coverage.out
+          done
+          
+          LOW_COVERAGE_FILES=$(echo -e "$LOW_COVERAGE_FILES" | sed '/^$/d')
+          
+          echo "files_to_process<<EOF" >> $GITHUB_OUTPUT
+          echo "$LOW_COVERAGE_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          if [ -n "$LOW_COVERAGE_FILES" ]; then
+            echo "🎯 Files needing test generation:"
+            echo "$LOW_COVERAGE_FILES"
+          else
+            echo "✅ All files have sufficient coverage!"
+          fi
+
+      - name: Setup test generator
+        if: steps.coverage_check.outputs.files_to_process != ''
+        run: |
+          echo "⚙️ Setting up test generator..."
+          
+          if [ ! -f go.mod ] || ! grep -q "github.com/kubeedge/kubeedge" go.mod; then
+            echo "❌ Not in KubeEdge repository root"
+            exit 1
+          fi
+          
+          cd scripts/test-generator
+          mkdir -p logs results
+          
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
+            echo "❌ GEMINI_API_KEY not configured"
+            exit 1
+          fi
+          
+          echo "✅ Test generator ready"
+
+      - name: Generate and validate tests
+        if: steps.coverage_check.outputs.files_to_process != ''
+        id: generate_tests
+        run: |
+          set -e
+          
+          echo "🤖 Generating unit tests..."
+          cd scripts/test-generator
+          
+          FILES_TO_PROCESS="${{ steps.coverage_check.outputs.files_to_process }}"
+          
+          if [ -z "$FILES_TO_PROCESS" ]; then
+            echo "No files to process"
+            exit 0
+          fi
+          
+          echo "$FILES_TO_PROCESS" | while IFS= read -r file; do
+            if [ -z "$file" ]; then continue; fi
+            
+            echo "🔄 Processing: $file"
+            
+            FILE_DIR=$(dirname "$file")
+            FILE_NAME=$(basename "$file" .go)
+            TEST_FILE="${FILE_DIR}/${FILE_NAME}_test.go"
+            
+            echo "📝 Target test file: $TEST_FILE"
+            
+            PKG_DIR=$(dirname "$file")
+            BEFORE_COVERAGE="0"
+            if go test -coverprofile=before_coverage.out "./$PKG_DIR" 2>/dev/null && [ -f "before_coverage.out" ]; then
+              BEFORE_COVERAGE=$(go tool cover -func=before_coverage.out | grep "$(basename "$file")" | awk '{print $3}' | sed 's/%//' || echo "0")
+            fi
+            
+            echo "📊 Current coverage for $file: ${BEFORE_COVERAGE}%"
+            
+            echo "🧠 Calling LLM to generate tests..."
+            if go run . \
+              -changed-files="$file" \
+              -repo-owner="${{ github.repository_owner }}" \
+              -repo-name="${{ github.event.repository.name }}" \
+              -github-token="${{ secrets.GITHUB_TOKEN }}" \
+              -gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
+              -coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
+              -max-retry-attempts="${{ env.MAX_RETRY_ATTEMPTS }}" \
+              -debug=true \
+              -mode="generate-only"; then
+              
+              echo "✅ Test generation completed for $file"
+              
+              if [ -f "../../$TEST_FILE" ]; then
+                echo "📁 Test file created: $TEST_FILE"
+                
+                echo "🧪 Validating generated test..."
+                cd ../../
+                
+                if go test -coverprofile=after_coverage.out "./$PKG_DIR" 2>test_error.log; then
+                  AFTER_COVERAGE="0"
+                  if [ -f "after_coverage.out" ]; then
+                    AFTER_COVERAGE=$(go tool cover -func=after_coverage.out | grep "$(basename "$file")" | awk '{print $3}' | sed 's/%//' || echo "0")
+                  fi
+                  
+                  echo "📈 New coverage for $file: ${AFTER_COVERAGE}%"
+                  echo "📊 Coverage improvement: $((${AFTER_COVERAGE%.*} - ${BEFORE_COVERAGE%.*}))%"
+                  
+                  echo "$file|$TEST_FILE|$BEFORE_COVERAGE|$AFTER_COVERAGE" >> scripts/test-generator/successful_tests.txt
+                  
+                  echo "✅ Test validation successful for $file"
+                else
+                  echo "❌ Generated test failed for $file"
+                  echo "Error log:"
+                  cat test_error.log || true
+                  
+                  rm -f "$TEST_FILE"
+                  echo "$file|Test compilation/execution failed" >> scripts/test-generator/failed_tests.txt
+                fi
+                
+                rm -f after_coverage.out test_error.log before_coverage.out
+                cd scripts/test-generator
+              else
+                echo "❌ Test file was not created for $file"
+                echo "$file|Test file not generated" >> failed_tests.txt
+              fi
+            else
+              echo "❌ LLM test generation failed for $file"
+              echo "$file|LLM generation failed" >> failed_tests.txt
+            fi
+            
+            echo "---"
+          done
+          
+          cd scripts/test-generator
+          
+          if [ -f "successful_tests.txt" ]; then
+            SUCCESS_COUNT=$(wc -l < successful_tests.txt)
+            echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+            echo "has_successful_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "success_count=0" >> $GITHUB_OUTPUT
+            echo "has_successful_tests=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ -f "failed_tests.txt" ]; then
+            FAILURE_COUNT=$(wc -l < failed_tests.txt)
+            echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
+          else
+            echo "failure_count=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR for successful tests
+        if: steps.generate_tests.outputs.has_successful_tests == 'true'
+        run: |
+          echo "📝 Creating PR for generated tests..."
+          
+          cd scripts/test-generator
+          
+          BRANCH_NAME="auto-tests-pr-${{ steps.coverage_check.outputs.pr_number }}-$(date +%Y%m%d-%H%M%S)"
+          
+          cd ../../
+          git config --global user.name "KubeEdge Auto Test Generator"
+          git config --global user.email "action@github.com"
+          
+          git checkout -b "$BRANCH_NAME"
+          
+          while IFS='|' read -r source_file test_file before_coverage after_coverage; do
+            if [ -f "$test_file" ]; then
+              git add "$test_file"
+              echo "📁 Added $test_file to git"
+            fi
+          done < scripts/test-generator/successful_tests.txt
+          
+          COMMIT_MESSAGE="Add auto-generated unit tests
+
+          Generated tests for files with coverage < ${{ env.COVERAGE_THRESHOLD }}%
+          Source PR: #${{ steps.coverage_check.outputs.pr_number }}
+
+          Coverage improvements:"
+          
+          while IFS='|' read -r source_file test_file before_coverage after_coverage; do
+            COMMIT_MESSAGE="$COMMIT_MESSAGE
+          - $(basename "$source_file"): ${before_coverage}% → ${after_coverage}%"
+          done < scripts/test-generator/successful_tests.txt
+          
+          COMMIT_MESSAGE="$COMMIT_MESSAGE
+
+          Generated by KubeEdge Auto Test Generator"
+          
+          git commit -m "$COMMIT_MESSAGE"
+          
+          git push origin "$BRANCH_NAME"
+          
+          # Create coverage table for PR body
+          COVERAGE_TABLE="| File | Before | After | Improvement |
+          |------|--------|-------|-------------|"
+          
+          while IFS='|' read -r source_file test_file before_coverage after_coverage; do
+            improvement=$((${after_coverage%.*} - ${before_coverage%.*}))
+            COVERAGE_TABLE="$COVERAGE_TABLE
+          | \`$(basename "$source_file")\` | ${before_coverage}% | ${after_coverage}% | +${improvement}% |"
+          done < scripts/test-generator/successful_tests.txt
+          
+          # Create PR using GitHub CLI
+          gh pr create \
+            --title "Add auto-generated unit tests for PR #${{ steps.coverage_check.outputs.pr_number }}" \
+            --body "## 🤖 Auto-Generated Unit Tests
+
+          This PR contains automatically generated unit tests for files with low coverage from PR #${{ steps.coverage_check.outputs.pr_number }}.
+
+          ### 📊 Coverage Improvements
+
+          $COVERAGE_TABLE
+
+          ### ✅ Validation Status
+          - All generated tests compile successfully
+          - All generated tests pass execution
+          - Coverage improvements verified
+
+          ### 🤖 Generation Details
+          - **Trigger**: PR #${{ steps.coverage_check.outputs.pr_number }} merge
+          - **Coverage Threshold**: ${{ env.COVERAGE_THRESHOLD }}%
+          - **LLM Provider**: Gemini
+          - **Files Processed**: ${{ steps.generate_tests.outputs.success_count }}
+          - **Generation Time**: $(date)
+
+          ### 📝 Next Steps
+          1. Review the generated tests for accuracy and completeness
+          2. Run \`make test\` to verify integration with KubeEdge test suite
+          3. Merge when satisfied with test quality
+
+          ---
+          *Generated by KubeEdge Auto Test Generator*" \
+            --head "$BRANCH_NAME" \
+            --base main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup test generator workspace
-        if: steps.pr_info.outputs.changed_files != ''
+      - name: Summary report
+        if: always()
         run: |
-          # Verify we're in the KubeEdge repository root
-          if [ ! -f go.mod ] || ! grep -q "github.com/kubeedge/kubeedge" go.mod; then
-            echo "❌ Not in KubeEdge repository root or go.mod missing"
-            exit 1
-          fi
-
-          # Verify required files exist in scripts/test-generator/
+          echo "📋 Test Generation Summary"
+          echo "========================="
+          
           cd scripts/test-generator
-          # Updated: email-sender.go is no longer required
-          REQUIRED_FILES="main.go coverage-analyzer.go test-generator.go pr-creator.go template-loader.go"
-          for file in $REQUIRED_FILES; do
-            if [ ! -f "$file" ]; then
-              echo "❌ Required file $file not found"
-              exit 1
-            fi
-          done
-
-          echo "✅ All required files found"
-
-          # Use root module dependencies (no separate go.mod needed)
-          cd ../..
-          echo "📦 Using root KubeEdge module dependencies"
-          go mod download
-          go mod tidy
-
-      - name: Validate API credentials
-        if: steps.pr_info.outputs.changed_files != ''
-        run: |
-          # Check if required secrets are available
-          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
-            echo "❌ GEMINI_API_KEY secret not configured"
-            exit 1
+          
+          if [ -f "successful_tests.txt" ]; then
+            echo "✅ Successfully generated tests:"
+            while IFS='|' read -r source_file test_file before_coverage after_coverage; do
+              improvement=$((${after_coverage%.*} - ${before_coverage%.*}))
+              echo "  - $(basename "$source_file"): ${before_coverage}% → ${after_coverage}% (+${improvement}%)"
+            done < successful_tests.txt
           fi
-
-          if [ -z "${{ secrets.GITHUB_TOKEN }}" ]; then
-            echo "❌ GITHUB_TOKEN not available"
-            exit 1
+          
+          if [ -f "failed_tests.txt" ]; then
+            echo "❌ Failed to generate tests:"
+            while IFS='|' read -r source_file reason; do
+              echo "  - $(basename "$source_file"): $reason"
+            done < failed_tests.txt
           fi
-
-          echo "✅ API credentials validated"
-
-      - name: Run coverage analysis
-        if: steps.pr_info.outputs.changed_files != ''
-        id: coverage_analysis
-        run: |
-          echo "📊 Running KubeEdge coverage analysis..."
-
-          # Run KubeEdge's coverage analysis (continue on error)
-          make test PROFILE=y || echo "Coverage analysis completed with issues"
-
-          # Check if coverage.out was generated
-          if [ -f coverage.out ]; then
-            echo "coverage_file_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Coverage file generated successfully"
-            
-            # Copy coverage file to test-generator directory for easy access
-            cp coverage.out scripts/test-generator/
-          else
-            echo "coverage_file_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Coverage file not generated, proceeding with default analysis"
-          fi
-
-      - name: Run auto test generator
-        if: steps.pr_info.outputs.changed_files != ''
-        run: |
-          echo "🤖 Starting KubeEdge Auto Test Generator..."
-          echo "📁 Processing files: ${{ steps.pr_info.outputs.changed_files }}"
-          echo "🎯 Coverage threshold: ${{ env.COVERAGE_THRESHOLD }}%"
-          echo "🔄 Max retry attempts: ${{ env.MAX_RETRY_ATTEMPTS }}"
-
-          # Create logs directory and run from scripts/test-generator
-          cd scripts/test-generator
-          mkdir -p logs
-
-          # Run the auto test generator (email functionality disabled in code)
-          go run . \
-            -pr-number="${{ steps.pr_info.outputs.pr_number }}" \
-            -changed-files="${{ steps.pr_info.outputs.changed_files }}" \
-            -repo-owner="vivekbisen04" \
-            -repo-name="kubeedge" \
-            -github-token="${{ secrets.GITHUB_TOKEN }}" \
-            -gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
-            -coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
-            -max-retry-attempts="${{ env.MAX_RETRY_ATTEMPTS }}" \
-            -pr-author="${{ steps.pr_info.outputs.pr_author }}" \
-            -coverage-file="../../coverage.out" \
-            -debug=true
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-generator-logs
+          name: test-generation-results
           path: |
             scripts/test-generator/logs/
-            scripts/test-generator/coverage.out
+            scripts/test-generator/successful_tests.txt
+            scripts/test-generator/failed_tests.txt
           retention-days: 7
-
-      - name: Comment on original PR
-        if: steps.pr_info.outputs.changed_files != ''
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const prNumber = ${{ steps.pr_info.outputs.pr_number }};
-            const changedFiles = `${{ steps.pr_info.outputs.changed_files }}`.split('\n').filter(f => f.trim());
-
-            let comment = `## 🤖 Auto Test Generator Summary\n\n`;
-            comment += `This PR triggered automatic test generation for ${changedFiles.length} Go files.\n\n`;
-
-            comment += `### 📁 Analyzed Files:\n`;
-            changedFiles.forEach(file => {
-              if (file.trim()) comment += `- \`${file}\`\n`;
-            });
-
-            comment += `\n### ⚙️ Configuration:\n`;
-            comment += `- **🎯 Coverage Threshold**: ${process.env.COVERAGE_THRESHOLD}%\n`;
-            comment += `- **🔄 Max Retry Attempts**: ${process.env.MAX_RETRY_ATTEMPTS}\n`;
-            comment += `- **⚡ Validation Mode**: Simplified (No Docker)\n`;
-            comment += `- **🤖 LLM Provider**: Gemini 1.5 Flash\n`;
-
-            comment += `### 📊 Results:\n`;
-            comment += `Check the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for detailed results.\n\n`;
-
-            comment += `### 📝 Next Steps:\n`;
-            comment += `- Generated test files (if any) will be submitted as separate PRs\n`;
-            comment += `- Review and merge the generated test PRs to improve coverage\n`;
-            comment += `- Check the artifacts for detailed logs and coverage reports\n`;
-            comment += `- All failure details are logged in the workflow console (no issues created)\n\n`;
-
-            comment += `### 📋 Benefits of This Approach:\n`;
-            comment += `- ✅ No spam GitHub issues created\n`;
-            comment += `- 📊 Comprehensive logging in workflow console\n`;
-            comment += `- 🎯 Focus on successful test generation\n`;
-            comment += `- 🧹 Clean repository without notification clutter\n\n`;
-
-            comment += `---\n`;
-            comment += `*🔧 Auto Test Generator v2.0 - Silent Mode (No Issues)*`;
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              body: comment
-            });
-
-      - name: Cleanup on failure
-        if: failure()
-        run: |
-          echo "🧹 Cleaning up after failure..."
-
-          # Clean up any partial files or branches that might have been created
-          cd scripts/test-generator
-
-          # Remove any temporary coverage files
-          rm -f coverage.out
-
-          # Log failure information
-          echo "❌ Auto test generation failed. Check the logs for details."
-          echo "🔍 All failure details are logged in the console above."
