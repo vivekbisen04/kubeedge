@@ -17,13 +17,13 @@ limitations under the License.
 package main
 
 import (
-	"time"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
-	"path/filepath"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -52,76 +52,14 @@ func NewKubeEdgeTestGenerator(apiKey string) *KubeEdgeTestGenerator {
 		templates: templates,
 	}
 }
-// ADD this helper function to test-generator.go
-func (ktg *KubeEdgeTestGenerator) findRepoRoot(startDir string) string {
-	currentDir := startDir
-	
-	for i := 0; i < 10; i++ { // Limit search to prevent infinite loop
-		// Check if go.mod exists and contains kubeedge
-		goModPath := filepath.Join(currentDir, "go.mod")
-		if fileExists(goModPath) {
-			// Read go.mod to verify it's the KubeEdge repository
-			content, err := os.ReadFile(goModPath)
-			if err == nil && strings.Contains(string(content), "github.com/kubeedge/kubeedge") {
-				return currentDir
-			}
-		}
-		
-		// Go up one level
-		parentDir := filepath.Dir(currentDir)
-		if parentDir == currentDir {
-			// Reached filesystem root
-			break
-		}
-		currentDir = parentDir
-	}
-	
-	return ""
-}
-func fileeExistOrNot(filename string) bool {
-	_, err := os.Stat(filename)
-	return !os.IsNotExist(err)
-}
-func (ktg *KubeEdgeTestGenerator) resolveFilePath(filePath string) string {
-	// If it's already an absolute path, return as-is
-	if filepath.IsAbs(filePath) {
-		return filePath
-	}
-	
-	// Get current working directory
-	wd, err := os.Getwd()
-	if err != nil {
-		return filePath
-	}
-	
-	// First, try the file path as-is from current directory
-	if fileeExistOrNot(filePath) {
-		absPath, _ := filepath.Abs(filePath)
-		return absPath
-	}
-	
-	// Find the repository root by looking for go.mod
-	repoRoot := ktg.findRepoRoot(wd)
-	if repoRoot == "" {
-		return filePath
-	}
-	
-	// Try resolving from repo root
-	resolvedPath := filepath.Join(repoRoot, filePath)
-	if fileeExistOrNot(resolvedPath) {
-		return filepath.Clean(resolvedPath)
-	}
-	
-	// If still not found, return the resolved path anyway
-	return filepath.Clean(resolvedPath)
-}
+
 // GenerateTests generates KubeEdge-compliant tests using LLM
 func (ktg *KubeEdgeTestGenerator) GenerateTests(ctx context.Context, filePath string, functions []FunctionInfo, previousError error) (string, error) {
-	// Resolve the file path using the same logic as CoverageAnalyzer
+	// Resolve the file path
 	resolvedPath := ktg.resolveFilePath(filePath)
 	
 	// Check if file exists
-	if !fileeExistOrNot(resolvedPath) {
+	if !fileExists(resolvedPath) {
 		return "", fmt.Errorf("file not found: %s (resolved to: %s)", filePath, resolvedPath)
 	}
 	
@@ -150,6 +88,68 @@ func (ktg *KubeEdgeTestGenerator) GenerateTests(ctx context.Context, filePath st
 	finalTestContent := ktg.cleanupGeneratedCode(testContent, packageName, imports, testType)
 
 	return finalTestContent, nil
+}
+
+// resolveFilePath resolves file path for the repository
+func (ktg *KubeEdgeTestGenerator) resolveFilePath(filePath string) string {
+	// If it's already an absolute path, return as-is
+	if filepath.IsAbs(filePath) {
+		return filePath
+	}
+	
+	// Get current working directory
+	wd, err := os.Getwd()
+	if err != nil {
+		return filePath
+	}
+	
+	// First, try the file path as-is from current directory
+	if fileExists(filePath) {
+		absPath, _ := filepath.Abs(filePath)
+		return absPath
+	}
+	
+	// Find the repository root by looking for go.mod
+	repoRoot := ktg.findRepoRoot(wd)
+	if repoRoot == "" {
+		return filePath
+	}
+	
+	// Try resolving from repo root
+	resolvedPath := filepath.Join(repoRoot, filePath)
+	if fileExists(resolvedPath) {
+		return filepath.Clean(resolvedPath)
+	}
+	
+	// If still not found, return the resolved path anyway
+	return filepath.Clean(resolvedPath)
+}
+
+// findRepoRoot finds the repository root by looking for go.mod
+func (ktg *KubeEdgeTestGenerator) findRepoRoot(startDir string) string {
+	currentDir := startDir
+	
+	for i := 0; i < 10; i++ { // Limit search to prevent infinite loop
+		// Check if go.mod exists and contains kubeedge
+		goModPath := filepath.Join(currentDir, "go.mod")
+		if fileExists(goModPath) {
+			// Read go.mod to verify it's the KubeEdge repository
+			content, err := os.ReadFile(goModPath)
+			if err == nil && strings.Contains(string(content), "github.com/kubeedge/kubeedge") {
+				return currentDir
+			}
+		}
+		
+		// Go up one level
+		parentDir := filepath.Dir(currentDir)
+		if parentDir == currentDir {
+			// Reached filesystem root
+			break
+		}
+		currentDir = parentDir
+	}
+	
+	return ""
 }
 
 // determineKubeEdgeTestType determines what kind of test pattern to use
@@ -298,22 +298,15 @@ func (ktg *KubeEdgeTestGenerator) buildKubeEdgePrompt(filePath string, originalC
 	case "keadm":
 		prompt.WriteString("- This is keadm (KubeEdge admin CLI)\n")
 		prompt.WriteString("- Focus on CLI command testing, flag validation, and command execution\n")
-		prompt.WriteString("- Test configuration parsing and validation\n")
-		prompt.WriteString("- Mock external command execution and file operations\n")
 	case "cloud":
 		prompt.WriteString("- This is a cloud component\n")
 		prompt.WriteString("- Test cloud controller logic and Kubernetes API interactions\n")
-		prompt.WriteString("- Mock Kubernetes client operations\n")
-		prompt.WriteString("- Test webhook handlers and admission controllers\n")
 	case "edge":
 		prompt.WriteString("- This is an edge component\n")
 		prompt.WriteString("- Test edge-specific functionality and device management\n")
-		prompt.WriteString("- Mock hardware interactions and message routing\n")
-		prompt.WriteString("- Test protocol handlers and device twin operations\n")
 	case "pkg":
 		prompt.WriteString("- This is a shared package component\n")
 		prompt.WriteString("- Test utility functions and common libraries\n")
-		prompt.WriteString("- Focus on unit testing with good edge case coverage\n")
 	}
 	prompt.WriteString("\n")
 
@@ -329,7 +322,6 @@ func (ktg *KubeEdgeTestGenerator) buildKubeEdgePrompt(filePath string, originalC
 	for i, fn := range functions {
 		prompt.WriteString(fmt.Sprintf("\n%d. Function: %s\n", i+1, fn.Name))
 		prompt.WriteString(fmt.Sprintf("   Exported: %t\n", fn.IsExported))
-		prompt.WriteString(fmt.Sprintf("   Has existing tests: %t\n", fn.HasTests))
 		prompt.WriteString("   Function code:\n")
 		prompt.WriteString("   ```go\n")
 		prompt.WriteString("   " + strings.ReplaceAll(fn.Content, "\n", "\n   "))
@@ -343,13 +335,12 @@ func (ktg *KubeEdgeTestGenerator) buildKubeEdgePrompt(filePath string, originalC
 	prompt.WriteString("4. Ensure all code compiles and runs without errors\n")
 	prompt.WriteString("5. Use descriptive test names that explain what is being tested\n")
 	prompt.WriteString("6. Include both positive and negative test cases\n")
-	prompt.WriteString("7. Add helpful comments explaining complex test scenarios\n")
 
 	return prompt.String()
 }
 
-// generateWithGemini calls Gemini API to generate test content (with detailed logging)
-func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt string, testType string) (string, error) {
+// generateWithGemini calls Gemini API to generate test content
+func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt string, _ string) (string, error) {
 	model := ktg.client.GenerativeModel("gemini-1.5-flash")
 	
 	// Configure model for code generation
@@ -357,10 +348,7 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 	model.SetTopK(40)
 	model.SetTopP(0.95)
 	
-	// Log request details
-	ktg.logAPIRequest(prompt, testType)
-	
-	// Add timeout context (2 minutes instead of default)
+	// Add timeout context (2 minutes)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	
@@ -369,9 +357,6 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 	duration := time.Since(startTime)
 	
 	fmt.Printf("⏱️ API Call Duration: %v\n", duration)
-	
-	// Log response details
-	ktg.logAPIResponse(resp, err)
 	
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %v", err)
@@ -392,7 +377,7 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 		return "", fmt.Errorf("empty content generated")
 	}
 
-	fmt.Printf("Successfully extracted %d characters of generated code\n", len(generatedCode))
+	fmt.Printf("Successfully generated %d characters of code\n", len(generatedCode))
 	return generatedCode, nil
 }
 
@@ -564,69 +549,6 @@ func (ktg *KubeEdgeTestGenerator) addImport(content string, importPath string) s
 	}
 	
 	return content
-}
-
-// logAPIRequest logs the API request details
-func (ktg *KubeEdgeTestGenerator) logAPIRequest(prompt string, testType string) {
-	fmt.Printf("🔍 API Request Details:\n")
-	fmt.Printf("   Model: gemini-1.5-flash\n")
-	fmt.Printf("   Test Type: %s\n", testType)
-	fmt.Printf("   Prompt Length: %d characters\n", len(prompt))
-	fmt.Printf("   Prompt Preview (first 500 chars):\n")
-	if len(prompt) > 500 {
-		fmt.Printf("   %s...\n", prompt[:500])
-	} else {
-		fmt.Printf("   %s\n", prompt)
-	}
-	fmt.Printf("   Temperature: 0.3\n")
-	fmt.Printf("   TopK: 40\n")
-	fmt.Printf("   TopP: 0.95\n")
-	fmt.Printf("🚀 Sending request to Gemini API...\n")
-}
-
-// logAPIResponse logs the API response details
-func (ktg *KubeEdgeTestGenerator) logAPIResponse(resp *genai.GenerateContentResponse, err error) {
-	if err != nil {
-		fmt.Printf("❌ API Error Details:\n")
-		fmt.Printf("   Error Type: %T\n", err)
-		fmt.Printf("   Error Message: %v\n", err)
-		return
-	}
-
-	fmt.Printf("✅ API Response Details:\n")
-	fmt.Printf("   Candidates Count: %d\n", len(resp.Candidates))
-	
-	if len(resp.Candidates) > 0 {
-		candidate := resp.Candidates[0]
-		fmt.Printf("   Content Parts: %d\n", len(candidate.Content.Parts))
-		
-		totalLength := 0
-		for i, part := range candidate.Content.Parts {
-			if text, ok := part.(genai.Text); ok {
-				partLength := len(string(text))
-				totalLength += partLength
-				fmt.Printf("   Part %d Length: %d characters\n", i+1, partLength)
-			}
-		}
-		fmt.Printf("   Total Response Length: %d characters\n", totalLength)
-		
-		// Show first 200 characters of response
-		if totalLength > 0 {
-			var firstText string
-			for _, part := range candidate.Content.Parts {
-				if text, ok := part.(genai.Text); ok {
-					firstText = string(text)
-					break
-				}
-			}
-			fmt.Printf("   Response Preview (first 200 chars):\n")
-			if len(firstText) > 200 {
-				fmt.Printf("   %s...\n", firstText[:200])
-			} else {
-				fmt.Printf("   %s\n", firstText)
-			}
-		}
-	}
 }
 
 // Close closes the Gemini client

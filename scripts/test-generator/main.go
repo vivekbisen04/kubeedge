@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package main implements the KubeEdge Auto Test Generator
-// This tool runs as part of KubeEdge's main module and uses existing dependencies
+// Following mentor's workflow: PR Merged → Check Coverage → Generate Tests → Validate → Create PR
 package main
 
 import (
@@ -24,634 +24,315 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
 
+// Config holds the simplified configuration
 type Config struct {
-	PRNumber          string
-	ChangedFiles      string
-	RepoOwner         string
-	RepoName          string
-	GithubToken       string
-	GeminiAPIKey      string
 	CoverageThreshold float64
-	MaxRetryAttempts  int
-	PRAuthor          string
-	CoverageFile      string
+	MaxRetries        int
+	GeminiAPIKey      string
+	ChangedFiles      string
+	WorkingDir        string
 	Debug             bool
-	Mode              string // "full" or "generate-only"
+	// Removed unused fields to fix constructor issues
 }
 
-type ProcessingResult struct {
-	FilePath       string
+// ProcessResult represents the result of processing a single file
+type ProcessResult struct {
+	SourceFile     string
+	TestFile       string
 	Success        bool
 	Error          error
-	TestsPRNumber  int
-	TestFile       string
 	BeforeCoverage float64
 	AfterCoverage  float64
 	Duration       time.Duration
 }
 
 func main() {
+	// Parse command line flags
 	config := parseFlags()
-
-	// Validate required configuration
-	if err := validateConfig(config); err != nil {
-		log.Fatalf("Configuration validation failed: %v", err)
-	}
-
-	// Setup logging
-	if err := setupLogging(config.Debug); err != nil {
-		log.Printf("Warning: Failed to setup logging: %v", err)
-	}
-
-	if config.ChangedFiles == "" {
-		log.Println("No changed files to process")
-		return
+	
+	if config.Debug {
+		log.Printf("🚀 Starting KubeEdge Auto Test Generator")
+		log.Printf("📋 Coverage Threshold: %.0f%%", config.CoverageThreshold)
 	}
 
 	ctx := context.Background()
 
-	log.Printf("Starting KubeEdge Auto Test Generator - %s mode", config.Mode)
-	log.Printf("Coverage threshold: %.1f%%", config.CoverageThreshold)
-	log.Printf("Max retry attempts: %d", config.MaxRetryAttempts)
-	log.Printf("Debug mode: %t", config.Debug)
-	log.Printf("Working directory: %s", getWorkingDir())
+	// Initialize components with proper constructors
+	validator := NewTestValidator(config.WorkingDir, config.CoverageThreshold)
+	generator := NewKubeEdgeTestGenerator(config.GeminiAPIKey)
+	defer generator.Close()
 
-	// Initialize services
-	coverageAnalyzer := NewCoverageAnalyzer(config.CoverageFile)
-	testGenerator := NewKubeEdgeTestGenerator(config.GeminiAPIKey)
-	defer testGenerator.Close()
+	// Step 1: Get modified files (from git or provided list)
+	var filesToCheck []string
+	var err error
 
-	var prCreator *PRCreator
-	if config.Mode == "full" {
-		prCreator = NewPRCreator(config.GithubToken, config.RepoOwner, config.RepoName)
-		// Check GitHub API rate limits
-		if err := prCreator.CheckRateLimit(ctx); err != nil {
-			log.Printf("GitHub API rate limit warning: %v", err)
+	if config.ChangedFiles != "" {
+		// Use provided files (from workflow)
+		filesToCheck = parseChangedFiles(config.ChangedFiles)
+		log.Printf("📂 Using provided files: %v", filesToCheck)
+	} else {
+		// Get from git (for local testing)
+		filesToCheck, err = validator.GetModifiedFilesFromGit(ctx)
+		if err != nil {
+			log.Fatalf("❌ Failed to get modified files: %v", err)
 		}
+		log.Printf("📂 Found %d modified Go files", len(filesToCheck))
 	}
 
-	// Parse changed files
-	changedFiles := strings.Split(config.ChangedFiles, "\n")
-	var results []ProcessingResult
+	if len(filesToCheck) == 0 {
+		log.Println("ℹ️ No Go files to process")
+		return
+	}
+
+	// Step 2: Check Coverage of Modified Files → If < 40%
+	lowCoverageFiles, coverageInfos, err := validator.FilterLowCoverageFiles(ctx, filesToCheck)
+	if err != nil {
+		log.Fatalf("❌ Failed to filter low coverage files: %v", err)
+	}
+
+	if len(lowCoverageFiles) == 0 {
+		log.Println("✅ All files have sufficient coverage")
+		printCoverageSummary(coverageInfos, config.CoverageThreshold)
+		return
+	}
+
+	log.Printf("🎯 Found %d files needing test generation", len(lowCoverageFiles))
+
+	// Step 3: Generate Tests → Add filename_test.go → Run go test → If Tests Pass
+	var results []ProcessResult
 	successCount := 0
 	failureCount := 0
 
-	// Process each changed file
-	for _, filePath := range changedFiles {
-		filePath = strings.TrimSpace(filePath)
-		if filePath == "" {
-			continue
-		}
-
-		log.Printf("Processing file: %s", filePath)
+	for _, sourceFile := range lowCoverageFiles {
+		log.Printf("\n🔄 Processing: %s", sourceFile)
 		
-		var result ProcessingResult
-		if config.Mode == "generate-only" {
-			result = processFileForGeneration(ctx, filePath, config, coverageAnalyzer, testGenerator)
-		} else {
-			result = processFile(ctx, filePath, config, coverageAnalyzer, testGenerator, prCreator)
-		}
-		
+		result := processFileComplete(ctx, sourceFile, config, generator, validator)
 		results = append(results, result)
 
 		if result.Success {
 			successCount++
-			if config.Mode == "generate-only" {
-				log.Printf("Successfully generated tests for %s (Duration: %v)", 
-					result.FilePath, result.Duration)
-			} else {
-				log.Printf("Successfully processed %s (PR #%d, Duration: %v)",
-					result.FilePath, result.TestsPRNumber, result.Duration)
-			}
+			improvement := result.AfterCoverage - result.BeforeCoverage
+			log.Printf("✅ SUCCESS: %s (%.2f%% → %.2f%%, +%.2f%%)", 
+				sourceFile, result.BeforeCoverage, result.AfterCoverage, improvement)
 		} else {
 			failureCount++
-			log.Printf("Failed to process %s: %v (Duration: %v)",
-				result.FilePath, result.Error, result.Duration)
+			log.Printf("❌ FAILED: %s - %v", sourceFile, result.Error)
 		}
 	}
 
-	// Print summary
-	if config.Mode == "generate-only" {
-		printGenerationSummary(results, successCount, failureCount)
-	} else {
-		printProcessingSummary(results, successCount, failureCount, config.PRAuthor, config.PRNumber)
-		logFailureDetails(results, config.PRAuthor, config.PRNumber)
-	}
+	// Step 4: Generate summary files for workflow
+	generateWorkflowOutput(results)
 
-	// Print final summary
-	log.Printf("KubeEdge Auto Test Generator completed!")
-	log.Printf("Summary: %d successful, %d failed", successCount, failureCount)
+	// Step 5: Cleanup temporary files
+	validator.CleanupTempFiles()
 
-	// Don't exit with error code for failures - just log them
-	if failureCount > 0 {
-		log.Printf("⚠️ Some files failed processing - details logged above")
-	}
+	// Step 6: Print final summary
+	printFinalSummary(results, successCount, failureCount)
 }
 
-// processFileForGeneration processes a file in generate-only mode
-func processFileForGeneration(ctx context.Context, filePath string, config *Config, 
-	analyzer *CoverageAnalyzer, generator *KubeEdgeTestGenerator) ProcessingResult {
+// processFileComplete handles the complete workflow for a single file
+// Following: Generate Tests → Add filename_test.go → Run go test → If Tests Pass
+func processFileComplete(ctx context.Context, sourceFile string, config *Config, 
+	generator *KubeEdgeTestGenerator, validator *TestValidator) ProcessResult {
 	
 	startTime := time.Now()
-	result := ProcessingResult{
-		FilePath: filePath,
-		Duration: 0,
+	result := ProcessResult{
+		SourceFile: sourceFile,
+		Duration:   0,
 	}
 
 	defer func() {
 		result.Duration = time.Since(startTime)
 	}()
 
-	// Validate file exists
-	if !fileExists(filePath) {
-		result.Error = fmt.Errorf("file does not exist: %s", filePath)
-		return result
-	}
-
-	// Generate test file path
-	fileDir := filepath.Dir(filePath)
-	fileName := strings.TrimSuffix(filepath.Base(filePath), ".go")
-	testFile := filepath.Join(fileDir, fileName+"_test.go")
+	// Generate test file path (Add filename_test.go)
+	testFile := validator.GenerateTestFilePath(sourceFile)
 	result.TestFile = testFile
 
 	// Check if test file already exists
 	if fileExists(testFile) {
-		log.Printf("⚠️ Test file already exists: %s", testFile)
-		result.Success = true
-		return result
+		log.Printf("ℹ️ Test file already exists: %s", testFile)
+		
+		// Validate existing test file
+		validationResult := validator.ValidateGeneratedTest(ctx, sourceFile, testFile)
+		if validationResult.Success {
+			result.Success = true
+			result.BeforeCoverage = validationResult.BeforeCoverage
+			result.AfterCoverage = validationResult.AfterCoverage
+			return result
+		} else {
+			log.Printf("⚠️ Existing test file failed validation, regenerating...")
+			os.Remove(testFile) // Remove invalid test file
+		}
 	}
 
 	// Extract functions from source file
-	functions, err := extractFunctionsFromFile(filePath)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to extract functions: %v", err)
-		return result
-	}
-
-	if len(functions) == 0 {
-		log.Printf("⚠️ No testable functions found in %s", filePath)
-		result.Success = true
-		return result
-	}
-
-	log.Printf("🔍 Found %d functions to test in %s", len(functions), filePath)
-
-	// Generate tests with retry logic
-	testContent, success := generateTestsWithRetry(ctx, filePath, functions, generator, config.MaxRetryAttempts)
-	if !success {
-		result.Error = fmt.Errorf("test generation failed after %d attempts", config.MaxRetryAttempts)
-		return result
-	}
-
-	// Write test file
-	if err := writeTestFile(testFile, testContent); err != nil {
-		result.Error = fmt.Errorf("failed to write test file: %v", err)
-		return result
-	}
-
-	log.Printf("✅ Generated test file: %s", testFile)
-	result.Success = true
-	return result
-}
-
-// processFile processes a single Go file for test generation (full mode)
-func processFile(ctx context.Context, filePath string, config *Config,
-	analyzer *CoverageAnalyzer, generator *KubeEdgeTestGenerator, creator *PRCreator) ProcessingResult {
-
-	startTime := time.Now()
-	result := ProcessingResult{
-		FilePath: filePath,
-		Duration: 0,
-	}
-
-	defer func() {
-		result.Duration = time.Since(startTime)
-	}()
-
-	// Step 1: Analyze coverage
-	needsTests, coverage, err := analyzer.AnalyzeFile(ctx, filePath, config.CoverageThreshold)
-	if err != nil {
-		result.Error = fmt.Errorf("coverage analysis failed: %v", err)
-		return result
-	}
-
-	result.BeforeCoverage = coverage
-	log.Printf("Coverage for %s: %.2f%% (needs tests: %v)", filePath, coverage, needsTests)
-
-	if !needsTests {
-		log.Printf("%s has sufficient coverage (%.2f%%), skipping", filePath, coverage)
-		result.Success = true
-		return result
-	}
-
-	// Step 2: Extract functions
-	functions, err := analyzer.ExtractModifiedFunctions(ctx, filePath)
+	functions, err := extractFunctionsFromFile(sourceFile)
 	if err != nil {
 		result.Error = fmt.Errorf("function extraction failed: %v", err)
 		return result
 	}
 
 	if len(functions) == 0 {
-		log.Printf("No testable functions found in %s", filePath)
-		result.Success = true
+		result.Error = fmt.Errorf("no testable functions found")
 		return result
 	}
 
-	log.Printf("🔍 Found %d functions to test in %s", len(functions), filePath)
+	log.Printf("🔍 Found %d testable functions", len(functions))
 
-	// Step 3: Generate tests with retry logic
-	testContent, success := generateTestsWithRetry(ctx, filePath, functions, generator, config.MaxRetryAttempts)
+	// Generate Tests
+	testContent, success := generateTestsWithRetry(ctx, sourceFile, functions, generator, config.MaxRetries)
 	if !success {
-		result.Error = fmt.Errorf("test generation failed after %d attempts", config.MaxRetryAttempts)
+		result.Error = fmt.Errorf("test generation failed after %d attempts", config.MaxRetries)
 		return result
 	}
 
-	// Step 4: Create PR with generated tests
-	prNumber, err := creator.CreateTestsPR(ctx, filePath, testContent, coverage)
-	if err != nil {
-		result.Error = fmt.Errorf("PR creation failed: %v", err)
+	// Add filename_test.go
+	if err := writeTestFile(testFile, testContent); err != nil {
+		result.Error = fmt.Errorf("failed to write test file: %v", err)
 		return result
 	}
 
-	result.TestsPRNumber = prNumber
+	log.Printf("📝 Generated test file: %s", testFile)
+
+	// Run go test -coverprofile=coverage.out → If Tests Pass
+	validationResult := validator.ValidateGeneratedTest(ctx, sourceFile, testFile)
+	
+	if !validationResult.Success {
+		// Remove invalid test file
+		os.Remove(testFile)
+		result.Error = fmt.Errorf("validation failed: %v", validationResult.Error)
+		return result
+	}
+
+	// Success - populate result with validation data
 	result.Success = true
+	result.BeforeCoverage = validationResult.BeforeCoverage
+	result.AfterCoverage = validationResult.AfterCoverage
+
 	return result
 }
 
-// writeTestFile writes test content to a file
-func writeTestFile(testFile, content string) error {
-	// Ensure directory exists
-	dir := filepath.Dir(testFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %v", dir, err)
-	}
-
-	// Write file
-	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write file %s: %v", testFile, err)
-	}
-
-	return nil
-}
-
-// extractFunctionsFromFile extracts functions from a Go source file
-func extractFunctionsFromFile(filePath string) ([]FunctionInfo, error) {
-	// Read file content
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %v", err)
-	}
-
-	// Use existing AST parsing logic from coverage-analyzer.go
-	analyzer := &CoverageAnalyzer{}
-	functions, err := analyzer.extractFunctionsFromContent(string(content), filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse functions: %v", err)
-	}
-
-	// Filter out functions that shouldn't be tested
-	var testableFunctions []FunctionInfo
-	for _, fn := range functions {
-		if shouldTestFunction(fn) {
-			testableFunctions = append(testableFunctions, fn)
-		}
-	}
-
-	return testableFunctions, nil
-}
-
-// shouldTestFunction determines if a function should be tested
-func shouldTestFunction(fn FunctionInfo) bool {
-	// Skip unexported functions unless they're complex
-	if !fn.IsExported && len(fn.Content) < 200 {
-		return false
-	}
-
-	// Skip simple getters/setters
-	if isSimpleGetterSetter(fn.Content) {
-		return false
-	}
-
-	// Skip functions that are just variable assignments
-	if isSimpleAssignment(fn.Content) {
-		return false
-	}
-
-	return true
-}
-
-// isSimpleGetterSetter checks if a function is a simple getter or setter
-func isSimpleGetterSetter(content string) bool {
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	if len(lines) <= 3 {
-		// Check if it's just return or assignment
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "return ") || 
-			   strings.Contains(line, " = ") && !strings.Contains(line, "if ") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isSimpleAssignment checks if a function is just a simple assignment
-func isSimpleAssignment(content string) bool {
-	return strings.Count(content, "\n") <= 2 && 
-		   strings.Contains(content, " = ") && 
-		   !strings.Contains(content, "if ") &&
-		   !strings.Contains(content, "for ") &&
-		   !strings.Contains(content, "switch ")
-}
-
-// generateTestsWithRetry attempts to generate tests with retry logic
-func generateTestsWithRetry(ctx context.Context, filePath string, functions []FunctionInfo,
-	generator *KubeEdgeTestGenerator, maxAttempts int) (string, bool) {
-
-	var lastError error
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		log.Printf("Generating tests for %s (attempt %d/%d)", filePath, attempt, maxAttempts)
-
-		// Call LLM
-		testContent, err := generator.GenerateTests(ctx, filePath, functions, lastError)
-		if err != nil {
-			lastError = err
-			log.Printf("Generation failed (attempt %d): %v", attempt, err)
-			continue
-		}
-
-		log.Printf("Generated test content (attempt %d)", attempt)
-
-		// Validate generated content
-		if isValidGoTestContent(testContent) {
-			log.Printf("Tests generated successfully for %s", filePath)
-			return testContent, true
-		}
-
-		lastError = fmt.Errorf("generated content doesn't look like valid Go test code")
-		log.Printf("Validation failed (attempt %d): %v", attempt, lastError)
-	}
-
-	log.Printf("❌ All %d attempts failed for %s", maxAttempts, filePath)
-	return "", false
-}
-
-// isValidGoTestContent validates if content looks like Go test code
-func isValidGoTestContent(content string) bool {
-	checks := []string{
-		"package ",
-		"import",
-		"func Test",
-		"testing",
-	}
-
-	for _, check := range checks {
-		if !strings.Contains(content, check) {
-			return false
-		}
-	}
-	return true
-}
-
-// printGenerationSummary prints summary for generate-only mode
-func printGenerationSummary(results []ProcessingResult, successCount, failureCount int) {
-	log.Printf("\n" + strings.Repeat("=", 60))
-	log.Printf("TEST GENERATION SUMMARY")
-	log.Print(strings.Repeat("=", 60))
-
-	log.Printf("Statistics:")
-	log.Printf("Successfully generated: %d files", successCount)
-	log.Printf("Failed: %d files", failureCount)
-	log.Printf("Total processed: %d files", len(results))
-
-	if len(results) > 0 {
-		successRate := float64(successCount) / float64(len(results)) * 100
-		log.Printf("Success Rate: %.1f%%", successRate)
-	}
-
-	// Show detailed results
-	if len(results) > 0 {
-		log.Printf("\nDetailed Results:")
-		for i, result := range results {
-			status := "SUCCESS"
-			if !result.Success {
-				status = "FAILED"
-			}
-
-			log.Printf("  %d. %s %s", i+1, status, result.FilePath)
-			if result.Success && result.TestFile != "" {
-				log.Printf("     Generated: %s", result.TestFile)
-			}
-			if !result.Success && result.Error != nil {
-				log.Printf("     Error: %v", result.Error)
-			}
-			log.Printf("     Duration: %v", result.Duration.Round(time.Second))
-		}
-	}
-
-	log.Printf(strings.Repeat("=", 60) + "\n")
-}
-
-// printProcessingSummary prints a comprehensive summary of processing results (full mode)
-func printProcessingSummary(results []ProcessingResult, successCount, failureCount int, prAuthor, prNumber string) {
-	log.Printf("\n" + strings.Repeat("=", 60))
-	log.Printf("PROCESSING SUMMARY")
-	log.Print(strings.Repeat("=", 60))
-
-	log.Printf("Statistics:")
-	log.Printf("Successful: %d files", successCount)
-	log.Printf("Failed: %d files", failureCount)
-	log.Printf("Total processed: %d files", len(results))
-
-	if len(results) > 0 {
-		successRate := float64(successCount) / float64(len(results)) * 100
-		log.Printf("Success Rate: %.1f%%", successRate)
-	}
-
-	if prNumber != "" {
-		log.Printf("Original PR: #%s by @%s", prNumber, prAuthor)
-	}
-
-	log.Printf("Timestamp: %s", time.Now().Format("2006-01-02 15:04:05 UTC"))
-
-	// Show detailed results
-	if len(results) > 0 {
-		log.Printf("\nDetailed Results:")
-		for i, result := range results {
-			status := "SUCCESS"
-			if !result.Success {
-				status = "FAILED"
-			}
-
-			log.Printf("  %d. %s %s", i+1, status, result.FilePath)
-			log.Printf("     Coverage: %.1f%% | Duration: %v", result.BeforeCoverage, result.Duration.Round(time.Second))
-
-			if result.Success && result.TestsPRNumber > 0 {
-				log.Printf("     Created test PR #%d", result.TestsPRNumber)
-			} else if !result.Success && result.Error != nil {
-				log.Printf("     Error: %v", result.Error)
-			}
-		}
-	}
-
-	if successCount > 0 {
-		log.Printf("\nGenerated Test PRs:")
-		log.Printf("  - %d new test PRs created", successCount)
-		log.Printf("  - Review and merge them to improve coverage")
-		log.Printf("  - Target overall coverage: 80%% (per codecov.yml)")
-	}
-
-	if failureCount > 0 {
-		log.Printf("\nFailed Generations:")
-		log.Printf("  - %d files could not have tests auto-generated", failureCount)
-		log.Printf("  - See failure details below")
-		log.Printf("  - These may require manual test creation")
-	}
-
-	log.Printf(strings.Repeat("=", 60) + "\n")
-}
-
-// logFailureDetails logs detailed information about failed test generations
-func logFailureDetails(results []ProcessingResult, prAuthor, prNumber string) {
-	failedResults := make([]ProcessingResult, 0)
-	for _, result := range results {
-		if !result.Success {
-			failedResults = append(failedResults, result)
-		}
-	}
-
-	if len(failedResults) == 0 {
-		return
-	}
-
-	log.Printf("\n" + strings.Repeat("=", 60))
-	log.Printf("FAILURE ANALYSIS")
-	log.Print(strings.Repeat("=", 60))
-
-	for i, result := range failedResults {
-		log.Printf("\nFAILURE #%d:", i+1)
-		log.Printf("  File: %s", result.FilePath)
-		log.Printf("  Coverage: %.1f%%", result.BeforeCoverage)
-		log.Printf("  Duration: %v", result.Duration.Round(time.Second))
-		log.Printf("  Error: %v", result.Error)
-
-		log.Printf("\n  Likely Causes:")
-		log.Printf("    - File has complex dependencies difficult to mock")
-		log.Printf("    - Code structure doesn't follow standard Go testing patterns")
-		log.Printf("    - Import or dependency issues")
-		log.Printf("    - File requires manual test setup or custom mocking")
-
-		log.Printf("\n  Recommended Actions:")
-		log.Printf("    1. Manual Test Creation: Consider creating tests manually")
-		log.Printf("    2. Code Review: Review file structure for testability")
-		log.Printf("    3. Refactoring: Consider refactoring complex functions")
-		log.Printf("    4. Dependencies: Check if external deps need custom mocking")
-	}
-
-	log.Printf("\nKubeEdge Testing Guidelines:")
-	log.Printf("  - Use gomonkey v2 for mocking external functions")
-	log.Printf("  - Follow table-driven test patterns")
-	log.Printf("  - Use github.com/stretchr/testify/assert for assertions")
-	log.Printf("  - Ensure tests are independent and repeatable")
-
-	log.Printf("\nResources:")
-	log.Printf("  - KubeEdge Testing Documentation: https://github.com/kubeedge/kubeedge/blob/master/docs/testing.md")
-	log.Printf("  - Go Testing Best Practices: https://golang.org/doc/tutorial/add-a-test")
-	log.Printf("  - gomonkey Documentation: https://github.com/agiledragon/gomonkey")
-
-	if prAuthor != "" {
-		log.Printf("\nPR Author: @%s", prAuthor)
-	}
-	if prNumber != "" {
-		log.Printf("Original PR: #%s", prNumber)
-	}
-
-	log.Printf(strings.Repeat("=", 60) + "\n")
-}
-
-// getWorkingDir returns the current working directory for debugging
-func getWorkingDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "unknown"
-	}
-	return wd
-}
-
-// parseFlags parses command line flags
+// parseFlags parses command line arguments with proper defaults
 func parseFlags() *Config {
 	config := &Config{}
 
-	flag.StringVar(&config.PRNumber, "pr-number", "", "Pull request number")
-	flag.StringVar(&config.ChangedFiles, "changed-files", "", "Newline-separated list of changed files")
-	flag.StringVar(&config.RepoOwner, "repo-owner", "kubeedge", "Repository owner")
-	flag.StringVar(&config.RepoName, "repo-name", "kubeedge", "Repository name")
-	flag.StringVar(&config.GithubToken, "github-token", os.Getenv("GITHUB_TOKEN"), "GitHub token")
-	flag.StringVar(&config.GeminiAPIKey, "gemini-api-key", os.Getenv("GEMINI_API_KEY"), "Gemini API key")
 	flag.Float64Var(&config.CoverageThreshold, "coverage-threshold", 40.0, "Coverage threshold percentage")
-	flag.IntVar(&config.MaxRetryAttempts, "max-retry-attempts", 3, "Maximum retry attempts for test generation")
-	flag.StringVar(&config.PRAuthor, "pr-author", "", "PR author username")
-	flag.StringVar(&config.CoverageFile, "coverage-file", "", "Path to coverage file (optional)")
-	flag.BoolVar(&config.Debug, "debug", strings.ToLower(os.Getenv("DEBUG")) == "true", "Enable debug logging")
-	flag.StringVar(&config.Mode, "mode", "full", "Operation mode: 'full' or 'generate-only'")
-
+	flag.IntVar(&config.MaxRetries, "max-retries", 3, "Maximum retry attempts for test generation")
+	flag.StringVar(&config.GeminiAPIKey, "gemini-api-key", "", "Gemini API key for test generation")
+	flag.StringVar(&config.ChangedFiles, "changed-files", "", "Comma-separated list of changed files")
+	flag.StringVar(&config.WorkingDir, "working-dir", ".", "Working directory")
+	flag.BoolVar(&config.Debug, "debug", false, "Enable debug logging")
+	
 	flag.Parse()
+
+	// Get API key from environment if not provided
+	if config.GeminiAPIKey == "" {
+		config.GeminiAPIKey = os.Getenv("GEMINI_API_KEY")
+	}
+
+	if config.GeminiAPIKey == "" {
+		log.Fatal("❌ GEMINI_API_KEY is required")
+	}
+
 	return config
 }
 
-// validateConfig validates the configuration
-func validateConfig(config *Config) error {
-	if config.GeminiAPIKey == "" {
-		return fmt.Errorf("gemini-api-key is required")
+// parseChangedFiles parses comma-separated file list
+func parseChangedFiles(filesStr string) []string {
+	var files []string
+	for _, file := range strings.Split(filesStr, ",") {
+		file = strings.TrimSpace(file)
+		if file != "" && strings.HasSuffix(file, ".go") && !strings.HasSuffix(file, "_test.go") {
+			files = append(files, file)
+		}
 	}
-	if config.RepoOwner == "" {
-		return fmt.Errorf("repo-owner is required")
-	}
-	if config.RepoName == "" {
-		return fmt.Errorf("repo-name is required")
-	}
-	if config.CoverageThreshold < 0 || config.CoverageThreshold > 100 {
-		return fmt.Errorf("coverage-threshold must be between 0 and 100")
-	}
-	if config.MaxRetryAttempts < 1 || config.MaxRetryAttempts > 10 {
-		return fmt.Errorf("max-retry-attempts must be between 1 and 10")
-	}
-	if config.Mode != "full" && config.Mode != "generate-only" {
-		return fmt.Errorf("mode must be 'full' or 'generate-only'")
-	}
-	
-	// For full mode, GitHub token is required
-	if config.Mode == "full" && config.GithubToken == "" {
-		return fmt.Errorf("github-token is required for full mode")
-	}
-	
-	return nil
+	return files
 }
 
-// setupLogging sets up logging configuration
-func setupLogging(debug bool) error {
-	logDir := "logs"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return err
+// generateWorkflowOutput creates output files for GitHub workflow
+func generateWorkflowOutput(results []ProcessResult) {
+	var successfulTests []string
+	var failedTests []string
+
+	for _, result := range results {
+		if result.Success {
+			line := fmt.Sprintf("%s|%s|%.2f|%.2f", 
+				result.SourceFile, result.TestFile, result.BeforeCoverage, result.AfterCoverage)
+			successfulTests = append(successfulTests, line)
+		} else {
+			line := fmt.Sprintf("%s|%v", result.SourceFile, result.Error)
+			failedTests = append(failedTests, line)
+		}
 	}
 
-	logFile := filepath.Join(logDir, fmt.Sprintf("test-generator-%s.log", time.Now().Format("2006-01-02-15-04-05")))
-	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		return err
+	// Write successful tests file
+	if len(successfulTests) > 0 {
+		content := strings.Join(successfulTests, "\n")
+		if err := os.WriteFile("successful_tests.txt", []byte(content), 0644); err != nil {
+			log.Printf("⚠️ Warning: Failed to write successful_tests.txt: %v", err)
+		}
 	}
 
-	log.SetOutput(file)
-	if debug {
-		log.Printf("Debug logging enabled")
+	// Write failed tests file
+	if len(failedTests) > 0 {
+		content := strings.Join(failedTests, "\n")
+		if err := os.WriteFile("failed_tests.txt", []byte(content), 0644); err != nil {
+			log.Printf("⚠️ Warning: Failed to write failed_tests.txt: %v", err)
+		}
+	}
+}
+
+// printCoverageSummary prints coverage summary for all checked files
+func printCoverageSummary(coverageInfos []CoverageInfo, threshold float64) {
+	fmt.Println("\n📊 COVERAGE SUMMARY")
+	fmt.Println(strings.Repeat("=", 50))
+	for _, info := range coverageInfos {
+		status := "✅ SUFFICIENT"
+		if info.Coverage < threshold {
+			status = "🎯 NEEDS TESTS"
+		}
+		fmt.Printf("%-30s %.2f%% %s\n", info.FilePath, info.Coverage, status)
+	}
+}
+
+// printFinalSummary prints the final processing summary
+func printFinalSummary(results []ProcessResult, successCount, failureCount int) {
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("🏁 KUBEEDGE AUTO TEST GENERATOR - FINAL SUMMARY")
+	fmt.Println(strings.Repeat("=", 60))
+	
+	fmt.Printf("📈 Total Processed: %d\n", len(results))
+	fmt.Printf("✅ Successful: %d\n", successCount)
+	fmt.Printf("❌ Failed: %d\n", failureCount)
+
+	if successCount > 0 {
+		fmt.Println("\n🎉 SUCCESSFUL GENERATIONS:")
+		for _, result := range results {
+			if result.Success {
+				improvement := result.AfterCoverage - result.BeforeCoverage
+				fmt.Printf("  📁 %-40s %.2f%% → %.2f%% (+%.2f%%)\n", 
+					result.SourceFile, result.BeforeCoverage, result.AfterCoverage, improvement)
+			}
+		}
 	}
 
-	return nil
+	if failureCount > 0 {
+		fmt.Println("\n💥 FAILED GENERATIONS:")
+		for _, result := range results {
+			if !result.Success {
+				fmt.Printf("  📁 %-40s %v\n", result.SourceFile, result.Error)
+			}
+		}
+	}
+
+	fmt.Println(strings.Repeat("=", 60))
+	
+	if successCount > 0 {
+		fmt.Println("🚀 Ready for PR creation! Check successful_tests.txt for details.")
+	}
 }
