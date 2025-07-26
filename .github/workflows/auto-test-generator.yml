@@ -66,7 +66,7 @@ jobs:
           fi
           
           # Filter files to only include core KubeEdge directories
-          TARGET_DIRS="cloud/ edge/ keadm/ pkg/"
+          TARGET_DIRS="cloud/ edge/ kedam/ pkg/"
           CHANGED_FILES=""
           
           echo "📂 Checking files in target directories: $TARGET_DIRS"
@@ -107,6 +107,8 @@ jobs:
 
       - name: Setup test generator
         if: steps.coverage_check.outputs.files_to_process != ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           echo "⚙️ Setting up test generator..."
           
@@ -118,8 +120,8 @@ jobs:
           cd scripts/test-generator
           mkdir -p logs results
           
-          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
-            echo "❌ GEMINI_API_KEY not configured"
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "❌ GEMINI_API_KEY not configured in repository secrets"
             exit 1
           fi
           
@@ -128,6 +130,8 @@ jobs:
       - name: Generate and validate tests
         if: steps.coverage_check.outputs.files_to_process != ''
         id: generate_tests
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -e
           
@@ -146,22 +150,38 @@ jobs:
           
           # SIMPLIFIED APPROACH: Let the generator handle everything
           if go run . \
-            -changed-files="$FILES_TO_PROCESS" \
-            -coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
-            -max-retries="${{ env.MAX_RETRIES }}" \
-            -gemini-api-key="${{ secrets.GEMINI_API_KEY }}" \
-            -debug=true; then
+            --changed-files="$FILES_TO_PROCESS" \
+            --coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
+            --max-retries="${{ env.MAX_RETRIES }}" \
+            --gemini-api-key="$GEMINI_API_KEY" \
+            --debug=true \
+            --working-dir="../../"; then
             
             echo "✅ Test generation workflow completed"
             
-            # Check results
+            # Check results and validate coverage improvements
             if [ -f "successful_tests.txt" ]; then
               SUCCESS_COUNT=$(wc -l < successful_tests.txt)
               echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
-              echo "has_successful_tests=true" >> $GITHUB_OUTPUT
               
-              echo "🎉 Successfully generated tests for $SUCCESS_COUNT files"
-              cat successful_tests.txt
+              # Validate that all tests actually improve coverage
+              VALID_TESTS=0
+              while IFS='|' read -r source_file test_file before_coverage after_coverage; do
+                before=${before_coverage%.*}
+                after=${after_coverage%.*}
+                if [ "$after" -gt "$before" ]; then
+                  VALID_TESTS=$((VALID_TESTS + 1))
+                fi
+              done < successful_tests.txt
+              
+              if [ "$VALID_TESTS" -gt 0 ]; then
+                echo "has_successful_tests=true" >> $GITHUB_OUTPUT
+                echo "🎉 Successfully generated tests for $VALID_TESTS files with coverage improvement"
+                cat successful_tests.txt
+              else
+                echo "has_successful_tests=false" >> $GITHUB_OUTPUT
+                echo "⚠️ No tests generated with meaningful coverage improvement"
+              fi
             else
               echo "success_count=0" >> $GITHUB_OUTPUT
               echo "has_successful_tests=false" >> $GITHUB_OUTPUT
