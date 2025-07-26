@@ -19,8 +19,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -75,7 +73,7 @@ func (ktg *KubeEdgeTestGenerator) GenerateTestsFromWholeFile(ctx context.Context
 }
 
 // buildSimplePrompt - ultra-simple prompt that lets LLM decide everything
-func (ktg *KubeEdgeTestGenerator) buildSimplePrompt(filePath string, sourceContent string, previousError error) string {
+func (ktg *KubeEdgeTestGenerator) buildSimplePrompt(_ string, sourceContent string, previousError error) string {
 	var prompt strings.Builder
 
 	prompt.WriteString("You are an expert Go test generator for KubeEdge project.\n\n")
@@ -92,10 +90,11 @@ func (ktg *KubeEdgeTestGenerator) buildSimplePrompt(filePath string, sourceConte
 	prompt.WriteString("1. Analyze the code and decide what testing approach to use\n")
 	prompt.WriteString("2. Choose appropriate imports (standard testing, testify, gomonkey if needed)\n")
 	prompt.WriteString("3. If mocking is needed, use: github.com/agiledragon/gomonkey/v2 (NOT github.com/agtorre/go-gomonkey/v2)\n")
-	prompt.WriteString("4. Create meaningful test cases for all exportable functions\n")
+	prompt.WriteString("4. Create meaningful test cases for ALL exportable functions - MUST actually call each function\n")
 	prompt.WriteString("5. Include edge cases, error cases, and boundary conditions\n")
 	prompt.WriteString("6. Make sure the code compiles and runs\n")
-	prompt.WriteString("7. Use table-driven tests where appropriate\n\n")
+	prompt.WriteString("7. Use table-driven tests where appropriate\n")
+	prompt.WriteString("8. CRITICAL: Each test MUST actually call the functions to achieve code coverage\n\n")
 
 	prompt.WriteString("GUIDELINES:\n")
 	prompt.WriteString("- For simple functions (math, string ops): use standard testing with testify\n")
@@ -190,32 +189,6 @@ func (ktg *KubeEdgeTestGenerator) generateWithGemini(ctx context.Context, prompt
 	return generatedCode, nil
 }
 
-// findRepoRoot finds the repository root by looking for go.mod
-func (ktg *KubeEdgeTestGenerator) findRepoRoot(startDir string) string {
-	currentDir := startDir
-	
-	for i := 0; i < 10; i++ { // Limit search to prevent infinite loop
-		// Check if go.mod exists and contains kubeedge
-		goModPath := filepath.Join(currentDir, "go.mod")
-		if fileExists(goModPath) {
-			// Read go.mod to verify it's the KubeEdge repository
-			content, err := os.ReadFile(goModPath)
-			if err == nil && strings.Contains(string(content), "github.com/kubeedge/kubeedge") {
-				return currentDir
-			}
-		}
-		
-		// Go up one level
-		parentDir := filepath.Dir(currentDir)
-		if parentDir == currentDir {
-			// Reached filesystem root
-			break
-		}
-		currentDir = parentDir
-	}
-	
-	return ""
-}
 
 // Close closes the Gemini client
 func (ktg *KubeEdgeTestGenerator) Close() {

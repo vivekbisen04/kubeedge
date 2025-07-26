@@ -14,8 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package main implements the KubeEdge Auto Test Generator
-// Following mentor's workflow: PR Merged → Check Coverage → Generate Tests → Validate → Create PR
+
 package main
 
 import (
@@ -24,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -36,14 +36,13 @@ type Config struct {
 	ChangedFiles      string
 	WorkingDir        string
 	Debug             bool
-	// PR Creation settings
+	DryRun            bool
 	CreatePR         bool
 	GitHubToken      string
 	RepoOwner        string
 	RepoName         string
 }
 
-// ProcessResult represents the result of processing a single file
 type ProcessResult struct {
 	SourceFile     string
 	TestFile       string
@@ -208,12 +207,13 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 		result.Duration = time.Since(startTime)
 	}()
 
-	// Generate test file path
+	// Generate test file path - use absolute path for working directory resolution
 	testFile := validator.GenerateTestFilePath(sourceFile)
 	result.TestFile = testFile
 
-	// Check if test file already exists
-	if fileExists(testFile) {
+	// Check if test file already exists - resolve relative to working directory
+	absTestFile := filepath.Join(config.WorkingDir, testFile)
+	if fileExists(absTestFile) {
 		log.Printf("ℹ️ Test file already exists: %s", testFile)
 		validationResult := validator.ValidateGeneratedTest(ctx, sourceFile, testFile)
 		if validationResult.Success {
@@ -223,14 +223,16 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 			return result
 		} else {
 			log.Printf("⚠️ Existing test file failed validation, regenerating...")
-			os.Remove(testFile)
+			os.Remove(absTestFile)
 		}
 	}
 
 	// ===== SIMPLIFIED APPROACH: Read whole file and send to LLM =====
 	log.Printf("📖 Reading source file: %s", sourceFile)
 	
-	sourceContent, err := os.ReadFile(sourceFile)
+	// Resolve source file path relative to working directory
+	absSourceFile := filepath.Join(config.WorkingDir, sourceFile)
+	sourceContent, err := os.ReadFile(absSourceFile)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to read source file: %v", err)
 		return result
@@ -253,8 +255,26 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 		return result
 	}
 
-	// Write test file
-	if err := writeTestFile(testFile, testContent); err != nil {
+	// Log the generated test content for debugging (only in debug mode)
+	// if config.Debug {
+	// 	log.Printf("\n" + strings.Repeat("=", 60))
+	// 	log.Printf("🤖 GENERATED TEST FILE CONTENT FOR: %s", sourceFile)
+	// 	log.Print(strings.Repeat("=", 60))
+	// 	log.Printf("\n%s\n", testContent)
+	// 	log.Print(strings.Repeat("=", 60))
+	// }
+
+	// // In dry-run mode, just show the content and return success
+	// if config.DryRun {
+	// 	log.Printf("🔍 DRY-RUN MODE: Test content generated successfully (no file written)")
+	// 	result.Success = true
+	// 	result.BeforeCoverage = 0.0  // Mock values for dry run
+	// 	result.AfterCoverage = 75.0  // Mock values for dry run
+	// 	return result
+	// }
+
+	// Write test file - resolve path relative to working directory  
+	if err := writeTestFile(absTestFile, testContent); err != nil {
 		result.Error = fmt.Errorf("failed to write test file: %v", err)
 		return result
 	}
@@ -265,7 +285,7 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 	validationResult := validator.ValidateGeneratedTest(ctx, sourceFile, testFile)
 
 	if !validationResult.Success {
-		os.Remove(testFile)
+		os.Remove(absTestFile)
 		result.Error = fmt.Errorf("validation failed: %v", validationResult.Error)
 		return result
 	}
@@ -287,6 +307,7 @@ func parseFlags() *Config {
 	flag.StringVar(&config.ChangedFiles, "changed-files", "", "Comma-separated list of changed files")
 	flag.StringVar(&config.WorkingDir, "working-dir", ".", "Working directory")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable debug logging")
+	flag.BoolVar(&config.DryRun, "dry-run", false, "Show generated test content without creating files")
 	
 	// PR Creation flags
 	flag.BoolVar(&config.CreatePR, "create-pr", false, "Create GitHub PR with generated tests")
