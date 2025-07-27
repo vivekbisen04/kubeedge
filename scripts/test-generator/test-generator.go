@@ -52,13 +52,18 @@ func NewKubeEdgeTestGenerator(apiKey string) *KubeEdgeTestGenerator {
 }
 
 // GenerateTestsFromWholeFile - NEW METHOD: Let LLM decide everything about testing approach
-func (ktg *KubeEdgeTestGenerator) GenerateTestsFromWholeFile(ctx context.Context, filePath string, sourceContent string, previousError error) (string, error) {
+func (ktg *KubeEdgeTestGenerator) GenerateTestsFromWholeFile(ctx context.Context, filePath string, sourceContent string, existingTestContent string, previousError error) (string, error) {
 	
 	// Extract package name for proper test file structure
 	packageName := ktg.extractPackageName(sourceContent)
 	
-	// Build ultra-simple prompt - let LLM decide everything
-	prompt := ktg.buildSimplePrompt(filePath, sourceContent, previousError)
+	// Build prompt based on whether existing test exists
+	var prompt string
+	if existingTestContent != "" {
+		prompt = ktg.buildEnhancementPrompt(filePath, sourceContent, existingTestContent, previousError)
+	} else {
+		prompt = ktg.buildSimplePrompt(filePath, sourceContent, previousError)
+	}
 
 	// Generate with Gemini AI
 	testContent, err := ktg.generateWithGemini(ctx, prompt, "auto")
@@ -72,7 +77,7 @@ func (ktg *KubeEdgeTestGenerator) GenerateTestsFromWholeFile(ctx context.Context
 	return finalTestContent, nil
 }
 
-// buildSimplePrompt - ultra-simple prompt that lets LLM decide everything
+// buildSimplePrompt - simplified prompt for new test file generation
 func (ktg *KubeEdgeTestGenerator) buildSimplePrompt(_ string, sourceContent string, previousError error) string {
 	var prompt strings.Builder
 
@@ -87,28 +92,56 @@ func (ktg *KubeEdgeTestGenerator) buildSimplePrompt(_ string, sourceContent stri
 	prompt.WriteString("TASK: Generate comprehensive unit tests for this Go file.\n\n")
 
 	prompt.WriteString("REQUIREMENTS:\n")
-	prompt.WriteString("1. Analyze the code and decide what testing approach to use\n")
-	prompt.WriteString("2. Choose appropriate imports (standard testing, testify, gomonkey if needed)\n")
-	prompt.WriteString("3. If mocking is needed, use: github.com/agiledragon/gomonkey/v2 (NOT github.com/agtorre/go-gomonkey/v2)\n")
-	prompt.WriteString("4. Create meaningful test cases for ALL exportable functions - MUST actually call each function\n")
-	prompt.WriteString("5. Include edge cases, error cases, and boundary conditions\n")
-	prompt.WriteString("6. Make sure the code compiles and runs\n")
-	prompt.WriteString("7. Use table-driven tests where appropriate\n")
-	prompt.WriteString("8. CRITICAL: Each test MUST actually call the functions to achieve code coverage\n\n")
-
-	prompt.WriteString("GUIDELINES:\n")
-	prompt.WriteString("- For simple functions (math, string ops): use standard testing with testify\n")
-	prompt.WriteString("- For functions with external dependencies: use mocking\n")
-	prompt.WriteString("- For complex business logic: use comprehensive test cases\n")
-	prompt.WriteString("- Always include both positive and negative test scenarios\n")
-	prompt.WriteString("- For math functions like Add, Subtract: do NOT use gomonkey, use standard testing\n\n")
+	prompt.WriteString("1. Analyze the source code and create unit tests for ALL exported functions\n")
+	prompt.WriteString("2. Use whatever imports are required (testing, errors, etc.)\n")
+	prompt.WriteString("3. Create meaningful test cases with edge cases and error scenarios\n")
+	prompt.WriteString("4. Make sure the code compiles and runs correctly\n")
+	prompt.WriteString("5. CRITICAL: Each test MUST actually call the functions to achieve code coverage\n\n")
 
 	prompt.WriteString("SOURCE FILE TO TEST:\n")
 	prompt.WriteString("```go\n")
 	prompt.WriteString(sourceContent)
 	prompt.WriteString("\n```\n\n")
 
-	prompt.WriteString("OUTPUT: Generate ONLY the complete test file content. Start with package declaration and imports.\n")
+	prompt.WriteString("OUTPUT: Generate ONLY the complete test file content. Start with package declaration and include all necessary imports.\n")
+
+	return prompt.String()
+}
+
+// buildEnhancementPrompt - prompt for enhancing existing test file
+func (ktg *KubeEdgeTestGenerator) buildEnhancementPrompt(_ string, sourceContent string, existingTestContent string, previousError error) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("You are an expert Go test generator for KubeEdge project.\n\n")
+	
+	if previousError != nil {
+		prompt.WriteString("PREVIOUS ATTEMPT FAILED:\n")
+		prompt.WriteString(fmt.Sprintf("Error: %v\n", previousError))
+		prompt.WriteString("Please fix the issues and generate working code.\n\n")
+	}
+
+	prompt.WriteString("TASK: Enhance and complete the existing test file to achieve better coverage.\n\n")
+
+	prompt.WriteString("REQUIREMENTS:\n")
+	prompt.WriteString("1. Review the existing test file and source code\n")
+	prompt.WriteString("2. Add missing tests for any untested exported functions\n")
+	prompt.WriteString("3. Improve existing tests with more edge cases and error scenarios\n")
+	prompt.WriteString("4. Use whatever imports are required (testing, errors, etc.)\n")
+	prompt.WriteString("5. Keep existing good tests and enhance/add new ones\n")
+	prompt.WriteString("6. Make sure the code compiles and runs correctly\n")
+	prompt.WriteString("7. CRITICAL: Ensure all exported functions are tested\n\n")
+
+	prompt.WriteString("SOURCE FILE:\n")
+	prompt.WriteString("```go\n")
+	prompt.WriteString(sourceContent)
+	prompt.WriteString("\n```\n\n")
+
+	prompt.WriteString("EXISTING TEST FILE:\n")
+	prompt.WriteString("```go\n")
+	prompt.WriteString(existingTestContent)
+	prompt.WriteString("\n```\n\n")
+
+	prompt.WriteString("OUTPUT: Generate ONLY the complete enhanced test file content. Start with package declaration and include all necessary imports.\n")
 
 	return prompt.String()
 }

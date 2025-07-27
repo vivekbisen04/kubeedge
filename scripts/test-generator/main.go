@@ -44,13 +44,14 @@ type Config struct {
 }
 
 type ProcessResult struct {
-	SourceFile     string
-	TestFile       string
-	Success        bool
-	Error          error
-	BeforeCoverage float64
-	AfterCoverage  float64
-	Duration       time.Duration
+	SourceFile       string
+	TestFile         string
+	Success          bool
+	Error            error
+	BeforeCoverage   float64
+	AfterCoverage    float64
+	Duration         time.Duration
+	GeneratedContent string // Store generated test content for debugging
 }
 
 func main() {
@@ -249,7 +250,11 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 	log.Printf("✅ File has testable content, proceeding with test generation")
 
 	// Generate tests for the entire file - let LLM decide everything
-	testContent, success := generateTestsWithLLMDecision(ctx, sourceFile, string(sourceContent), generator, config.MaxRetries)
+	testContent, success := generateTestsWithLLMDecision(ctx, sourceFile, string(sourceContent), generator, config.MaxRetries, config.WorkingDir)
+	
+	// Always save the generated content for debugging (even if generation failed)
+	result.GeneratedContent = testContent
+	
 	if !success {
 		result.Error = fmt.Errorf("test generation failed after %d attempts", config.MaxRetries)
 		return result
@@ -281,12 +286,19 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 
 	log.Printf("📝 Generated test file: %s", testFile)
 
+	// Clean up unused imports and format the code
+	if err := cleanupGoCode(absTestFile); err != nil {
+		log.Printf("⚠️ Warning: Failed to cleanup imports: %v", err)
+		// Don't fail the entire process for cleanup issues
+	}
+
 	// Validate - compile and test coverage
 	validationResult := validator.ValidateGeneratedTest(ctx, sourceFile, testFile)
 
 	if !validationResult.Success {
 		os.Remove(absTestFile)
 		result.Error = fmt.Errorf("validation failed: %v", validationResult.Error)
+		// Keep the generated content for debugging even when validation fails
 		return result
 	}
 
@@ -349,7 +361,7 @@ func parseChangedFiles(filesStr string) []string {
 // generateWorkflowOutput creates output files for GitHub workflow
 func generateWorkflowOutput(results []ProcessResult) {
 	var successfulTests []string
-	var failedTests []string
+	var failedTestsContent strings.Builder
 
 	for _, result := range results {
 		if result.Success {
@@ -357,8 +369,20 @@ func generateWorkflowOutput(results []ProcessResult) {
 				result.SourceFile, result.TestFile, result.BeforeCoverage, result.AfterCoverage)
 			successfulTests = append(successfulTests, line)
 		} else {
-			line := fmt.Sprintf("%s|%v", result.SourceFile, result.Error)
-			failedTests = append(failedTests, line)
+			// Write failed test info with generated content for debugging
+			failedTestsContent.WriteString(fmt.Sprintf("=== FAILED: %s ===\n", result.SourceFile))
+			failedTestsContent.WriteString(fmt.Sprintf("Error: %v\n", result.Error))
+			failedTestsContent.WriteString(fmt.Sprintf("Duration: %v\n", result.Duration))
+			
+			if result.GeneratedContent != "" {
+				failedTestsContent.WriteString("Generated Content:\n")
+				failedTestsContent.WriteString(strings.Repeat("-", 60) + "\n")
+				failedTestsContent.WriteString(result.GeneratedContent)
+				failedTestsContent.WriteString("\n" + strings.Repeat("-", 60) + "\n")
+			} else {
+				failedTestsContent.WriteString("No content was generated.\n")
+			}
+			failedTestsContent.WriteString("\n")
 		}
 	}
 
@@ -370,10 +394,9 @@ func generateWorkflowOutput(results []ProcessResult) {
 		}
 	}
 
-	// Write failed tests file
-	if len(failedTests) > 0 {
-		content := strings.Join(failedTests, "\n")
-		if err := os.WriteFile("failed_tests.txt", []byte(content), 0644); err != nil {
+	// Write failed tests file with detailed content
+	if failedTestsContent.Len() > 0 {
+		if err := os.WriteFile("failed_tests.txt", []byte(failedTestsContent.String()), 0644); err != nil {
 			log.Printf("⚠️ Warning: Failed to write failed_tests.txt: %v", err)
 		}
 	}

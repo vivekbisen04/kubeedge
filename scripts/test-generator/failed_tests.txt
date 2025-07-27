@@ -1,0 +1,172 @@
+=== FAILED: pkg/math/math.go ===
+Error: validation failed: tests execution failed: test execution failed: exit status 1, output: --- FAIL: TestPower (0.00s)
+    math_test.go:122: Test 4: Power(2, -1) = 1; want 0
+FAIL
+coverage: 100.0% of statements
+FAIL	github.com/kubeedge/kubeedge/pkg/math	0.002s
+FAIL
+
+Duration: 0s
+Generated Content:
+------------------------------------------------------------
+package math
+
+import (
+	"testing"
+	"math"
+	"fmt"
+)
+
+func TestAdd(t *testing.T) {
+	type test struct {
+		a, b, expected float64
+	}
+	tests := []test{
+		{1, 2, 3},
+		{-1, 2, 1},
+		{1, -2, -1},
+		{-1, -2, -3},
+		{0, 0, 0},
+		{math.MaxFloat64, math.MaxFloat64, math.Inf(1)}, //test with max float64
+		{math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64, 2 * math.SmallestNonzeroFloat64}, //test with smallest non-zero float64
+
+	}
+	for i, tt := range tests {
+		got := Add(tt.a, tt.b)
+		if got != tt.expected {
+			t.Errorf("Test %d: Add(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+
+func TestSubtract(t *testing.T) {
+	type test struct {
+		a, b, expected float64
+	}
+	tests := []test{
+		{1, 2, -1},
+		{-1, 2, -3},
+		{1, -2, 3},
+		{-1, -2, 1},
+		{0, 0, 0},
+		{math.MaxFloat64, 1, math.MaxFloat64 -1}, //test with max float64
+		{math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64, 0}, //test with smallest non-zero float64
+
+	}
+	for i, tt := range tests {
+		got := Subtract(tt.a, tt.b)
+		if got != tt.expected {
+			t.Errorf("Test %d: Subtract(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+
+func TestMultiply(t *testing.T) {
+	type test struct {
+		a, b, expected float64
+	}
+	tests := []test{
+		{1, 2, 2},
+		{-1, 2, -2},
+		{1, -2, -2},
+		{-1, -2, 2},
+		{0, 0, 0},
+		{math.MaxFloat64, 2, math.Inf(1)}, //test with max float64
+		{math.SmallestNonzeroFloat64, 0, 0}, //test with smallest non-zero float64
+
+	}
+	for i, tt := range tests {
+		got := Multiply(tt.a, tt.b)
+		if got != tt.expected {
+			t.Errorf("Test %d: Multiply(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+
+func TestDivide(t *testing.T) {
+	type test struct {
+		a, b float64
+		expected float64
+		errExpected bool
+
+	}
+	tests := []test{
+		{1, 2, 0.5, false},
+		{-1, 2, -0.5, false},
+		{1, -2, -0.5, false},
+		{-1, -2, 0.5, false},
+		{0, 1, 0, false},
+		{1,0,0, true},
+		{math.MaxFloat64, 2, math.MaxFloat64/2, false}, //test with max float64
+		{math.SmallestNonzeroFloat64, 2, math.SmallestNonzeroFloat64/2, false}, //test with smallest non-zero float64
+
+	}
+	for i, tt := range tests {
+		got, err := Divide(tt.a, tt.b)
+		if (err != nil) != tt.errExpected {
+			t.Errorf("Test %d: Divide(%v, %v) error = %v; wantErr %v", i, tt.a, tt.b, err, tt.errExpected)
+			continue
+		}
+		if !tt.errExpected && got != tt.expected {
+			t.Errorf("Test %d: Divide(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+
+func TestPower(t *testing.T) {
+	type test struct {
+		a, b, expected float64
+	}
+	tests := []test{
+		{2, 3, 8},
+		{2, 0, 1},
+		{0, 0, 1},
+		{-2, 3, -8},
+		{2,-1, 0}, //handle negative exponent
+		{0, 3, 0},
+		{1, 10, 1},
+		{2, 10, 1024},
+		{1.5, 2, 2.25},
+		{1.5, 0, 1},
+	}
+	for i, tt := range tests {
+		got := Power(tt.a, tt.b)
+		if got != tt.expected {
+			t.Errorf("Test %d: Power(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+
+func TestModulo(t *testing.T) {
+	type test struct {
+		a, b int
+		expected int
+		errExpected bool
+	}
+	tests := []test{
+		{10, 3, 1, false},
+		{10, 0, 0, true},
+		{-10, 3, -1, false},
+		{10, -3, 1, false},
+		{-10, -3, -1, false},
+		{0, 5, 0, false},
+		{100, 10, 0, false},
+		{1000, 100, 0, false},
+		{1000, -100, 0, false},
+		{-1000, 100, 0, false},
+		{-1000, -100, 0, false},
+
+	}
+	for i, tt := range tests {
+		got, err := Modulo(tt.a, tt.b)
+		if (err != nil) != tt.errExpected {
+			t.Errorf("Test %d: Modulo(%v, %v) error = %v; wantErr %v", i, tt.a, tt.b, err, tt.errExpected)
+			continue
+		}
+		if !tt.errExpected && got != tt.expected {
+			t.Errorf("Test %d: Modulo(%v, %v) = %v; want %v", i, tt.a, tt.b, got, tt.expected)
+		}
+	}
+}
+------------------------------------------------------------
+
