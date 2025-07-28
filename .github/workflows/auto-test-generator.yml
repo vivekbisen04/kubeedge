@@ -29,28 +29,20 @@ jobs:
       actions: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.22.x"
+          go-version: 1.22.x
+          cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install goimports for code cleanup
-        run: |
-          echo "🔧 Installing goimports for automatic import cleanup..."
-          go install golang.org/x/tools/cmd/goimports@latest
-          echo "✅ goimports installed successfully"
+        run: go install golang.org/x/tools/cmd/goimports@latest
 
       - name: Get merged PR files and analyze coverage
         id: coverage_check
@@ -154,57 +146,48 @@ jobs:
           echo "🚀 Running simplified test generator..."
           echo "Files: $FILES_TO_PROCESS"
           
-          # SIMPLIFIED APPROACH: Let the generator handle everything
-          if go run . \
+          # Run test generator and capture output for parsing
+          if OUTPUT=$(go run . \
             --changed-files="$FILES_TO_PROCESS" \
             --coverage-threshold="${{ env.COVERAGE_THRESHOLD }}" \
             --max-retries="${{ env.MAX_RETRIES }}" \
             --gemini-api-key="$GEMINI_API_KEY" \
             --debug=true \
-            --working-dir="../../"; then
+            --working-dir="../../" \
+            --create-pr \
+            --github-token="${{ secrets.GITHUB_TOKEN }}" \
+            --repo-owner="vivekbisen04" \
+            --repo-name="kubeedge" 2>&1); then
             
             echo "✅ Test generation workflow completed"
+            echo "$OUTPUT"
             
-            # Check results and validate coverage improvements
-            if [ -f "successful_tests.txt" ]; then
-              SUCCESS_COUNT=$(wc -l < successful_tests.txt)
-              echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+            # Parse success count from logs
+            SUCCESS_COUNT=$(echo "$OUTPUT" | grep "WORKFLOW_SUCCESS_COUNT=" | cut -d'=' -f2)
+            FAILURE_COUNT=$(echo "$OUTPUT" | grep "WORKFLOW_FAILURE_COUNT=" | cut -d'=' -f2)
+            
+            # Set default values if parsing fails
+            SUCCESS_COUNT=${SUCCESS_COUNT:-0}
+            FAILURE_COUNT=${FAILURE_COUNT:-0}
+            
+            echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+            echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
+            
+            if [ "$SUCCESS_COUNT" -gt 0 ]; then
+              echo "has_successful_tests=true" >> $GITHUB_OUTPUT
+              echo "🎉 Successfully generated tests for $SUCCESS_COUNT files with coverage improvement"
               
-              # Validate that all tests actually improve coverage
-              VALID_TESTS=0
-              while IFS='|' read -r source_file test_file before_coverage after_coverage; do
-                before=${before_coverage%.*}
-                after=${after_coverage%.*}
-                if [ "$after" -gt "$before" ]; then
-                  VALID_TESTS=$((VALID_TESTS + 1))
-                fi
-              done < successful_tests.txt
-              
-              if [ "$VALID_TESTS" -gt 0 ]; then
-                echo "has_successful_tests=true" >> $GITHUB_OUTPUT
-                echo "🎉 Successfully generated tests for $VALID_TESTS files with coverage improvement"
-                cat successful_tests.txt
-              else
-                echo "has_successful_tests=false" >> $GITHUB_OUTPUT
-                echo "⚠️ No tests generated with meaningful coverage improvement"
-              fi
+              # Extract and save successful tests for PR creation
+              echo "$OUTPUT" | sed -n '/WORKFLOW_SUCCESSFUL_TESTS_START/,/WORKFLOW_SUCCESSFUL_TESTS_END/p' | \
+                grep "WORKFLOW_SUCCESS:" | sed 's/.*WORKFLOW_SUCCESS: //' > successful_tests.txt
             else
-              echo "success_count=0" >> $GITHUB_OUTPUT
               echo "has_successful_tests=false" >> $GITHUB_OUTPUT
-            fi
-            
-            if [ -f "failed_tests.txt" ]; then
-              FAILURE_COUNT=$(wc -l < failed_tests.txt)
-              echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
-              
-              echo "⚠️ Failed to generate tests for $FAILURE_COUNT files"
-              cat failed_tests.txt
-            else
-              echo "failure_count=0" >> $GITHUB_OUTPUT
+              echo "⚠️ No tests generated with meaningful coverage improvement"
             fi
             
           else
             echo "❌ Test generation failed"
+            echo "$OUTPUT"
             echo "success_count=0" >> $GITHUB_OUTPUT
             echo "has_successful_tests=false" >> $GITHUB_OUTPUT
             echo "failure_count=1" >> $GITHUB_OUTPUT
@@ -313,21 +296,20 @@ jobs:
           echo "📋 Test Generation Summary"
           echo "========================="
           
-          cd scripts/test-generator || exit 0
+          SUCCESS_COUNT="${{ steps.generate_tests.outputs.success_count }}"
+          FAILURE_COUNT="${{ steps.generate_tests.outputs.failure_count }}"
           
-          if [ -f "successful_tests.txt" ]; then
+          echo "📊 Results:"
+          echo "  ✅ Successful: ${SUCCESS_COUNT:-0}"
+          echo "  ❌ Failed: ${FAILURE_COUNT:-0}"
+          
+          if [ -f "scripts/test-generator/successful_tests.txt" ]; then
+            echo ""
             echo "✅ Successfully generated tests:"
             while IFS='|' read -r source_file test_file before_coverage after_coverage; do
               improvement=$((${after_coverage%.*} - ${before_coverage%.*}))
               echo "  - $(basename "$source_file"): ${before_coverage}% → ${after_coverage}% (+${improvement}%)"
-            done < successful_tests.txt
-          fi
-          
-          if [ -f "failed_tests.txt" ]; then
-            echo "❌ Failed to generate tests:"
-            echo "📄 See failed_tests.txt artifact for detailed analysis including generated content"
-            # Extract just the failed file names from our new format
-            grep "^=== FAILED:" failed_tests.txt | sed 's/=== FAILED: /  - /' | sed 's/ ===//' || echo "  - Check failed_tests.txt for details"
+            done < scripts/test-generator/successful_tests.txt
           fi
 
       - name: Upload artifacts
@@ -338,5 +320,4 @@ jobs:
           path: |
             scripts/test-generator/logs/
             scripts/test-generator/successful_tests.txt
-            scripts/test-generator/failed_tests.txt
           retention-days: 7

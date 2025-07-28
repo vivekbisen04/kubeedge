@@ -127,7 +127,7 @@ func main() {
 		}
 	}
 
-	// Step 4: Generate summary files for workflow
+	// Step 4: Generate workflow output via logs
 	generateWorkflowOutput(results)
 
 	// Step 5: Create PR if requested and tests were successful
@@ -339,10 +339,10 @@ func parseChangedFiles(filesStr string) []string {
 	return files
 }
 
-// generateWorkflowOutput creates output files for GitHub workflow
+// generateWorkflowOutput creates log-based output for GitHub workflow
 func generateWorkflowOutput(results []ProcessResult) {
 	var successfulTests []string
-	var failedTestsContent strings.Builder
+	var failedTests []string
 
 	for _, result := range results {
 		if result.Success {
@@ -350,36 +350,31 @@ func generateWorkflowOutput(results []ProcessResult) {
 				result.SourceFile, result.TestFile, result.BeforeCoverage, result.AfterCoverage)
 			successfulTests = append(successfulTests, line)
 		} else {
-			// Write failed test info with generated content for debugging
-			failedTestsContent.WriteString(fmt.Sprintf("=== FAILED: %s ===\n", result.SourceFile))
-			failedTestsContent.WriteString(fmt.Sprintf("Error: %v\n", result.Error))
-			failedTestsContent.WriteString(fmt.Sprintf("Duration: %v\n", result.Duration))
-			
-			if result.GeneratedContent != "" {
-				failedTestsContent.WriteString("Generated Content:\n")
-				failedTestsContent.WriteString(strings.Repeat("-", 60) + "\n")
-				failedTestsContent.WriteString(result.GeneratedContent)
-				failedTestsContent.WriteString("\n" + strings.Repeat("-", 60) + "\n")
-			} else {
-				failedTestsContent.WriteString("No content was generated.\n")
-			}
-			failedTestsContent.WriteString("\n")
+			failedTests = append(failedTests, result.SourceFile)
 		}
 	}
 
-	// Write successful tests file
+	// Output structured logs for workflow parsing
 	if len(successfulTests) > 0 {
-		content := strings.Join(successfulTests, "\n")
-		if err := os.WriteFile("successful_tests.txt", []byte(content), 0644); err != nil {
-			log.Printf("⚠️ Warning: Failed to write successful_tests.txt: %v", err)
+		log.Printf("WORKFLOW_SUCCESS_COUNT=%d", len(successfulTests))
+		log.Printf("WORKFLOW_SUCCESSFUL_TESTS_START")
+		for _, test := range successfulTests {
+			log.Printf("WORKFLOW_SUCCESS: %s", test)
 		}
+		log.Printf("WORKFLOW_SUCCESSFUL_TESTS_END")
+	} else {
+		log.Printf("WORKFLOW_SUCCESS_COUNT=0")
 	}
 
-	// Write failed tests file with detailed content
-	if failedTestsContent.Len() > 0 {
-		if err := os.WriteFile("failed_tests.txt", []byte(failedTestsContent.String()), 0644); err != nil {
-			log.Printf("⚠️ Warning: Failed to write failed_tests.txt: %v", err)
+	if len(failedTests) > 0 {
+		log.Printf("WORKFLOW_FAILURE_COUNT=%d", len(failedTests))
+		log.Printf("WORKFLOW_FAILED_TESTS_START")
+		for _, test := range failedTests {
+			log.Printf("WORKFLOW_FAILURE: %s", test)
 		}
+		log.Printf("WORKFLOW_FAILED_TESTS_END")
+	} else {
+		log.Printf("WORKFLOW_FAILURE_COUNT=0")
 	}
 }
 
