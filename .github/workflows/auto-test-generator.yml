@@ -46,6 +46,12 @@ jobs:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
+      - name: Install goimports for code cleanup
+        run: |
+          echo "🔧 Installing goimports for automatic import cleanup..."
+          go install golang.org/x/tools/cmd/goimports@latest
+          echo "✅ goimports installed successfully"
+
       - name: Get merged PR files and analyze coverage
         id: coverage_check
         run: |
@@ -270,7 +276,8 @@ jobs:
 
           ### ✅ Validation Status
           - All generated tests compile successfully
-          - All generated tests pass execution
+          - All generated tests pass execution  
+          - Failed tests automatically removed (smart cleanup)
           - Coverage improvements verified
 
           ### 🤖 Generation Details
@@ -285,7 +292,8 @@ jobs:
           1. LLM analyzed entire source files (not individual functions)
           2. LLM decided testing approach (standard/mocking) automatically
           3. Generated comprehensive test cases with edge cases
-          4. Validated compilation and coverage improvement
+          4. **Smart Cleanup**: Automatically removed failing tests, kept passing ones
+          5. Validated compilation and coverage improvement
 
           ### 📝 Next Steps
           1. Review the generated tests for accuracy and completeness
@@ -317,9 +325,9 @@ jobs:
           
           if [ -f "failed_tests.txt" ]; then
             echo "❌ Failed to generate tests:"
-            while IFS='|' read -r source_file reason; do
-              echo "  - $(basename "$source_file"): $reason"
-            done < failed_tests.txt
+            echo "📄 See failed_tests.txt artifact for detailed analysis including generated content"
+            # Extract just the failed file names from our new format
+            grep "^=== FAILED:" failed_tests.txt | sed 's/=== FAILED: /  - /' | sed 's/ ===//' || echo "  - Check failed_tests.txt for details"
           fi
 
       - name: Upload artifacts

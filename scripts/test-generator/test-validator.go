@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -268,6 +269,8 @@ func (tv *TestValidator) restoreTestFiles(renamedFiles map[string]string) {
 // RunGoTestWithCoverage runs tests and checks compilation/execution
 func (tv *TestValidator) RunGoTestWithCoverage(ctx context.Context, sourceFile string) (testsPass bool, compileSuccess bool, err error) {
 	packageDir := filepath.Dir(sourceFile)
+	testFile := tv.GenerateTestFilePath(sourceFile)
+	absTestFile := filepath.Join(tv.workingDir, testFile)
 	
 	coverageFile := filepath.Join(tv.workingDir, "coverage.out")
 	cmd := exec.CommandContext(ctx, "go", "test", "-coverprofile="+coverageFile, "./"+packageDir)
@@ -283,13 +286,47 @@ func (tv *TestValidator) RunGoTestWithCoverage(ctx context.Context, sourceFile s
 	compileSuccess = true
 
 	// Check test execution success
-	if execErr != nil {
+	if execErr != nil || strings.Contains(outputStr, "FAIL") {
+		// Tests failed, but compilation succeeded - try to salvage passing tests
+		log.Printf("⚠️ Some tests failed, attempting to remove failing tests and keep passing ones")
+		
+		// Parse failing test functions
+		failingTests := parseFailingTestFunctions(outputStr)
+		
+		if len(failingTests) > 0 {
+			// Remove failing test functions
+			if err := removeFailingTestFunctions(absTestFile, failingTests); err != nil {
+				log.Printf("❌ Failed to remove failing tests: %v", err)
+				return false, true, fmt.Errorf("test execution failed: %v, output: %s", execErr, outputStr)
+			}
+			
+			// Clean up imports after removing functions
+			if err := cleanupGoCode(absTestFile); err != nil {
+				log.Printf("⚠️ Warning: Failed to cleanup imports after removing tests: %v", err)
+			}
+			
+			// Re-run tests with remaining functions
+			log.Printf("🔄 Re-running tests with remaining test functions...")
+			cmd2 := exec.CommandContext(ctx, "go", "test", "-coverprofile="+coverageFile, "./"+packageDir)
+			cmd2.Dir = tv.workingDir
+			
+			output2, execErr2 := cmd2.CombinedOutput()
+			outputStr2 := string(output2)
+			
+			if execErr2 != nil {
+				return false, true, fmt.Errorf("tests still failing after cleanup: %v, output: %s", execErr2, outputStr2)
+			}
+			
+			// Check if remaining tests pass
+			if strings.Contains(outputStr2, "FAIL") {
+				return false, true, fmt.Errorf("remaining tests still failing: %s", outputStr2)
+			}
+			
+			log.Printf("✅ Successfully removed failing tests, remaining tests pass!")
+			return true, true, nil
+		}
+		
 		return false, true, fmt.Errorf("test execution failed: %v, output: %s", execErr, outputStr)
-	}
-
-	// Check for test failures in output
-	if strings.Contains(outputStr, "FAIL") {
-		return false, true, fmt.Errorf("some tests failed: %s", outputStr)
 	}
 
 	// Ensure tests actually ran

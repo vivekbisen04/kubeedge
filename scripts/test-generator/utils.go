@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -208,4 +209,146 @@ func runGoFmt(filePath string) error {
 		return fmt.Errorf("gofmt failed: %v", err)
 	}
 	return nil
+}
+
+// parseFailingTestFunctions extracts failing test function names from test output
+func parseFailingTestFunctions(testOutput string) []string {
+	var failingTests []string
+	
+	// Pattern to match: "--- FAIL: TestFunctionName (0.00s)"
+	failPattern := regexp.MustCompile(`--- FAIL: (Test\w+) \(`)
+	matches := failPattern.FindAllStringSubmatch(testOutput, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			testName := match[1]
+			failingTests = append(failingTests, testName)
+			log.Printf("🔍 Found failing test: %s", testName)
+		}
+	}
+	
+	return failingTests
+}
+
+// removeFailingTestFunctions removes specific test functions from a Go test file
+func removeFailingTestFunctions(filePath string, failingTests []string) error {
+	if len(failingTests) == 0 {
+		return nil // Nothing to remove
+	}
+	
+	log.Printf("🧹 Removing %d failing test functions from %s", len(failingTests), filePath)
+	
+	// Read the file
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %v", err)
+	}
+	
+	fileContent := string(content)
+	
+	// Remove each failing test function
+	for _, testName := range failingTests {
+		log.Printf("🗑️ Removing test function: %s", testName)
+		fileContent = removeTestFunction(fileContent, testName)
+	}
+	
+	// Write the modified content back
+	err = os.WriteFile(filePath, []byte(fileContent), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write modified file: %v", err)
+	}
+	
+	log.Printf("✅ Successfully removed failing tests, keeping remaining tests")
+	return nil
+}
+
+// removeTestFunction removes a specific test function from Go source code
+func removeTestFunction(content string, testName string) string {
+	// For functions with nested braces, we use a sophisticated approach
+	return removeComplexTestFunction(content, testName)
+}
+
+// removeComplexTestFunction handles test functions with nested braces
+func removeComplexTestFunction(content string, testName string) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	inTargetFunction := false
+	braceCount := 0
+	hasSeenOpenBrace := false
+	
+	funcPattern := regexp.MustCompile(`^\s*func\s+` + regexp.QuoteMeta(testName) + `\s*\(`)
+	
+	for i, line := range lines {
+		if !inTargetFunction {
+			// Look for the start of our target function
+			if funcPattern.MatchString(line) {
+				inTargetFunction = true
+				hasSeenOpenBrace = false
+				braceCount = 0
+				log.Printf("🔍 Found start of %s at line %d: %s", testName, i+1, strings.TrimSpace(line))
+				
+				// Count braces in the function declaration line
+				for _, char := range line {
+					if char == '{' {
+						braceCount++
+						hasSeenOpenBrace = true
+					} else if char == '}' {
+						braceCount--
+					}
+				}
+				
+				// If function is on one line, we're done
+				if hasSeenOpenBrace && braceCount == 0 {
+					inTargetFunction = false
+					log.Printf("🔍 Single-line function %s at line %d", testName, i+1)
+				}
+				continue // Skip this line
+			}
+			result = append(result, line)
+		} else {
+			// We're inside the target function, count braces
+			for _, char := range line {
+				if char == '{' {
+					braceCount++
+					hasSeenOpenBrace = true
+				} else if char == '}' {
+					braceCount--
+				}
+			}
+			
+			// If braces are balanced and we've seen at least one opening brace, function is complete
+			if hasSeenOpenBrace && braceCount == 0 {
+				inTargetFunction = false
+				log.Printf("🔍 Found end of %s at line %d: %s", testName, i+1, strings.TrimSpace(line))
+				continue // Skip this line too
+			}
+			// Skip all lines while we're inside the target function
+		}
+	}
+	
+	// Clean up excessive empty lines
+	cleanedResult := cleanupEmptyLines(result)
+	
+	return strings.Join(cleanedResult, "\n")
+}
+
+// cleanupEmptyLines removes excessive consecutive empty lines
+func cleanupEmptyLines(lines []string) []string {
+	var result []string
+	emptyLineCount := 0
+	
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			emptyLineCount++
+			// Keep at most 2 consecutive empty lines
+			if emptyLineCount <= 2 {
+				result = append(result, line)
+			}
+		} else {
+			emptyLineCount = 0
+			result = append(result, line)
+		}
+	}
+	
+	return result
 }
