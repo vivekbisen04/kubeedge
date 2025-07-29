@@ -36,7 +36,6 @@ type Config struct {
 	ChangedFiles      string
 	WorkingDir        string
 	Debug             bool
-	DryRun            bool
 	CreatePR         bool
 	GitHubToken      string
 	RepoOwner        string
@@ -171,8 +170,8 @@ func createPRFromResults(ctx context.Context, results []ProcessResult, config *C
 		return fmt.Errorf("no successful results to create PR for")
 	}
 
-	// Create PR using the simplified PR creator
-	prCreator := NewSimplifiedPRCreator(config.GitHubToken, config.RepoOwner, config.RepoName)
+	// Create PR using the simplified PR creator with working directory
+	prCreator := NewSimplifiedPRCreatorWithWorkingDir(config.GitHubToken, config.RepoOwner, config.RepoName, config.WorkingDir)
 	
 	prNumber, err := prCreator.CreateTestsPR(ctx, successfulResults)
 	if err != nil {
@@ -260,23 +259,6 @@ func processFileComplete(ctx context.Context, sourceFile string, config *Config,
 		return result
 	}
 
-	// Log the generated test content for debugging (only in debug mode)
-	// if config.Debug {
-	// 	log.Printf("\n" + strings.Repeat("=", 60))
-	// 	log.Printf("🤖 GENERATED TEST FILE CONTENT FOR: %s", sourceFile)
-	// 	log.Print(strings.Repeat("=", 60))
-	// 	log.Printf("\n%s\n", testContent)
-	// 	log.Print(strings.Repeat("=", 60))
-	// }
-
-	// // In dry-run mode, just show the content and return success
-	// if config.DryRun {
-	// 	log.Printf("🔍 DRY-RUN MODE: Test content generated successfully (no file written)")
-	// 	result.Success = true
-	// 	result.BeforeCoverage = 0.0  // Mock values for dry run
-	// 	result.AfterCoverage = 75.0  // Mock values for dry run
-	// 	return result
-	// }
 
 	// Write test file - resolve path relative to working directory  
 	if err := writeTestFile(absTestFile, testContent); err != nil {
@@ -319,7 +301,6 @@ func parseFlags() *Config {
 	flag.StringVar(&config.ChangedFiles, "changed-files", "", "Comma-separated list of changed files")
 	flag.StringVar(&config.WorkingDir, "working-dir", ".", "Working directory")
 	flag.BoolVar(&config.Debug, "debug", false, "Enable debug logging")
-	flag.BoolVar(&config.DryRun, "dry-run", false, "Show generated test content without creating files")
 	
 	// PR Creation flags
 	flag.BoolVar(&config.CreatePR, "create-pr", false, "Create GitHub PR with generated tests")

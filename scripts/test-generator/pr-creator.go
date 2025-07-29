@@ -30,13 +30,19 @@ import (
 
 // SimplifiedPRCreator handles GitHub PR creation with minimal features
 type SimplifiedPRCreator struct {
-	client    *github.Client
-	repoOwner string
-	repoName  string
+	client     *github.Client
+	repoOwner  string
+	repoName   string
+	workingDir string
 }
 
 // NewSimplifiedPRCreator creates a new simplified PR creator
 func NewSimplifiedPRCreator(token, repoOwner, repoName string) *SimplifiedPRCreator {
+	return NewSimplifiedPRCreatorWithWorkingDir(token, repoOwner, repoName, ".")
+}
+
+// NewSimplifiedPRCreatorWithWorkingDir creates a new simplified PR creator with working directory
+func NewSimplifiedPRCreatorWithWorkingDir(token, repoOwner, repoName, workingDir string) *SimplifiedPRCreator {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
@@ -45,9 +51,10 @@ func NewSimplifiedPRCreator(token, repoOwner, repoName string) *SimplifiedPRCrea
 	client := github.NewClient(tc)
 
 	return &SimplifiedPRCreator{
-		client:    client,
-		repoOwner: repoOwner,
-		repoName:  repoName,
+		client:     client,
+		repoOwner:  repoOwner,
+		repoName:   repoName,
+		workingDir: workingDir,
 	}
 }
 
@@ -92,8 +99,8 @@ func (spc *SimplifiedPRCreator) CreateTestsPR(ctx context.Context, results []Pro
 			continue
 		}
 
-		// Read test file content
-		testContent, err := readFile(result.TestFile)
+		// Read test file content with working directory context
+		testContent, err := readFileWithWorkingDir(result.TestFile, spc.workingDir)
 		if err != nil {
 			fmt.Printf("Warning: Could not read test file %s: %v\n", result.TestFile, err)
 			continue
@@ -207,11 +214,19 @@ func (spc *SimplifiedPRCreator) buildSimplePRDescription(results []ProcessResult
 	return body.String()
 }
 
-// readFile reads content from a file (helper function)
-func readFile(filePath string) (string, error) {
+// readFileWithWorkingDir reads content from a file with working directory context
+func readFileWithWorkingDir(filePath, workingDir string) (string, error) {
+	// Try relative path first
 	content, err := os.ReadFile(filePath)
+	if err == nil {
+		return string(content), nil
+	}
+	
+	// Try absolute path with working directory
+	absPath := filepath.Join(workingDir, filePath)
+	content, err = os.ReadFile(absPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read file at both %s and %s: %v", filePath, absPath, err)
 	}
 	return string(content), nil
 }

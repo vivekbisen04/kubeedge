@@ -28,8 +28,7 @@ import (
 )
 
 type KubeEdgeTestGenerator struct {
-	client    *genai.Client
-	templates map[string]string
+	client *genai.Client
 }
 
 func NewKubeEdgeTestGenerator(apiKey string) *KubeEdgeTestGenerator {
@@ -39,15 +38,8 @@ func NewKubeEdgeTestGenerator(apiKey string) *KubeEdgeTestGenerator {
 		panic(fmt.Sprintf("Failed to create Gemini client: %v", err))
 	}
 
-	templates := map[string]string{
-		"gomonkey":  loadGoMonkeyTemplate(),
-		"ginkgo":    loadGinkgoTemplate(),
-		"standard":  loadStandardTemplate(),
-	}
-
 	return &KubeEdgeTestGenerator{
-		client:    client,
-		templates: templates,
+		client: client,
 	}
 }
 
