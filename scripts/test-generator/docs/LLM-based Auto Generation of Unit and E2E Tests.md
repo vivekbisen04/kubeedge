@@ -1,6 +1,6 @@
 # KubeEdge Auto Test Generator
 
-A comprehensive AI-powered system for automatically generating  unit tests for the KubeEdge edge computing platform.
+An AI-powered system for automatically generating unit tests for the KubeEdge edge computing platform, using Google Gemini 1.5 Flash to improve code coverage and reduce manual testing effort.
 
 ## 📋 Table of Contents
 
@@ -16,15 +16,15 @@ A comprehensive AI-powered system for automatically generating  unit tests for t
 
 ## 🎯 Project Overview
 
-The KubeEdge Auto Test Generator is an intelligent GitHub workflow that automatically generates comprehensive unit tests for Go files in the KubeEdge repository. It leverages AI (Gemini 1.5 Flash) to analyze code patterns and create high-quality test files following KubeEdge's specific testing conventions.
+The KubeEdge Auto Test Generator automatically creates unit tests for Go files with low test coverage in the KubeEdge repository. It triggers on merged PRs, analyzes coverage, and uses Google Gemini AI to generate comprehensive test files.
 
 ### Project Goals
 
-- **Automated Test Generation**: Reduce manual effort in writing unit tests
-- **Coverage Improvement**: Target files with low test coverage (<40%)
-- **KubeEdge Standards**: Follow project-specific testing patterns and frameworks
-- **CI/CD Integration**: Seamless integration with KubeEdge's development workflow
-- **Quality Assurance**: Generate compilable, comprehensive test code
+- **Automated Test Generation**: Generate unit tests for files with coverage < 40%
+- **Coverage Improvement**: Increase test coverage across KubeEdge components
+- **CI/CD Integration**: Seamless GitHub Actions workflow integration
+- **Quality Assurance**: Generate compilable, validated test code
+- **Smart Cleanup**: Automatically remove failing tests, keep passing ones
 
 ## 🏗️ System Architecture
 
@@ -43,158 +43,143 @@ graph TD
 
 ```
 scripts/test-generator/
-├── main.go                    # Main orchestrator
-├── coverage-analyzer.go       # Coverage analysis engine
-├── test-generator.go          # AI-powered test generation
-├── test-validator.go          # Test validation and compilation
+├── main.go                    # Main orchestrator and CLI
+├── test-generator.go          # Gemini AI test generation
+├── test-validator.go          # Coverage analysis and validation
 ├── pr-creator.go             # GitHub PR automation
-├── template-loader.go        # Test template management
 ├── utils.go                  # Utility functions
-├── config/
-│   └── kubeedge-patterns.json # Component-specific patterns
-├── templates/
-│   ├── standard-template.txt  # Standard Go test template
-│   ├── gomonkey-template.txt  # GoMonkey mocking template
-│   └── ginkgo-template.txt    # Ginkgo BDD template
-└── .github/workflows/
+├── docs/                     # Documentation
+│   └── LLM-based Auto Generation of Unit and E2E Tests.md
+├── logs/                     # Generated during execution
+├── results/                  # Generated during execution
+└── ../../.github/workflows/
     └── auto-test-generator.yml # GitHub Actions workflow
 ```
 
 ## 🔧 Core Components
 
-### 1. Coverage Analyzer (`coverage-analyzer.go`)
+### 1. Main Orchestrator (`main.go`)
 
-**Purpose**: Analyzes code coverage and identifies files needing tests
+**Purpose**: CLI interface and workflow orchestration
 
 **Key Features**:
-- Coverage parsing with multiple format support
-- Configurable coverage thresholds (default: 40%)
-- AST-based function extraction and complexity analysis
-- Smart function filtering (excludes main, init, test functions)
+- Command-line argument parsing with comprehensive flags
+- File processing pipeline coordination  
+- Coverage threshold filtering (default: 40%)
+- PR creation workflow management
+- Debug logging and workflow output generation
 
-**Testing Commands**:
+**Command Line Options**:
 ```bash
-# Test coverage analysis
-go test -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
-
-# Analyze specific package
-go test -coverprofile=coverage.out ./cloud/pkg/common/monitor/
+--coverage-threshold=40.0    # Coverage threshold percentage
+--max-retries=3             # Maximum retry attempts
+--gemini-api-key=""         # Gemini API key
+--changed-files=""          # Comma-separated list of files
+--working-dir="."           # Working directory
+--debug=false               # Enable debug logging
+--create-pr=false           # Create GitHub PR
+--github-token=""           # GitHub token for PR creation
+--repo-owner=""             # GitHub repository owner
+--repo-name=""              # GitHub repository name
 ```
-
-**Capabilities**:
-- ✅ KubeEdge-specific coverage analysis
-- ✅ AST-based function extraction
-- ✅ Complexity assessment
-- ✅ Existing test detection
 
 ### 2. Test Generator (`test-generator.go`)
 
-**Purpose**: AI-powered test code generation using Gemini 1.5 Flash
+**Purpose**: Google Gemini AI integration for test code generation
 
 **Key Features**:
-- Gemini 1.5 Flash integration with optimized parameters
-- Component-aware test generation (cloud/edge/keadm/pkg)
-- Multiple test types: Standard Go tests, GoMonkey mocking, Ginkgo BDD
-- Smart prompting with error recovery
+- Gemini 1.5 Flash API integration
+- Whole-file analysis approach (simplified from function-level)
+- Intelligent test framework selection (Standard Go testing, GoMonkey mocking)
+- Retry logic with improved prompting on failures
+- Context-aware generation for KubeEdge components
 
-**AI Configuration**:
-- Temperature: 0.3 (consistent code generation)
-- TopK: 40, TopP: 0.95
-- Timeout: 2 minutes per generation
-
-**Component-Specific Generation**:
-- **Cloud Components**: Kubernetes client mocking, controller testing
-- **Edge Components**: Beego ORM integration, edge-specific patterns
-- **Keadm Components**: CLI testing, command execution mocking
-- **Pkg Components**: Utility function testing with appropriate mocking
+**Generation Process**:
+1. Read entire source file content
+2. Send to Gemini with KubeEdge-specific prompts
+3. Generate comprehensive test file
+4. Handle API errors and retries
+5. Return generated test content
 
 ### 3. Test Validator (`test-validator.go`)
 
-**Purpose**: Validates generated tests for compilation and coverage improvement
+**Purpose**: Coverage analysis, compilation validation, and test execution
 
 **Key Features**:
-- Compilation verification with `go test -c`
-- Coverage measurement using `go test -coverprofile`
-- Baseline vs. improved coverage comparison
-- Test execution validation
+- Git-based modified file detection
+- Coverage calculation using `go test -coverprofile`
+- Test compilation verification
+- Before/after coverage comparison
+- Smart cleanup of failing tests
 
-**Testing Commands**:
+**Validation Process**:
 ```bash
-# Validate test compilation
-go test -c ./path/to/package
+# Coverage analysis
+go test -coverprofile=coverage.out ./package
+go tool cover -func=coverage.out
 
-# Run tests with coverage
-go test -coverprofile=coverage.out ./path/to/package
+# Compilation check  
+go test -c ./package
 
-# Check coverage improvement
-go tool cover -func=coverage.out | grep total
+# Test execution
+go test ./package
 ```
 
 ### 4. PR Creator (`pr-creator.go`)
 
-**Purpose**: GitHub automation for test PR creation and management
+**Purpose**: GitHub PR automation and management
 
 **Key Features**:
-- Automated PR creation with rich metadata
+- GitHub API integration for PR creation
 - Smart branch naming with timestamps
-- Comprehensive PR descriptions with review checklists
-- GitHub API integration with rate limit handling
+- Rich PR descriptions with coverage tables
+- Commit management for generated test files
+- Integration with GitHub CLI (`gh` commands)
 
-**PR Content Structure**:
-```markdown
-## 🤖 Auto-Generated Unit Tests
-- Coverage Information (before/after percentages)
-- Generated Test Features
-- Testing Framework Details
-- Review Checklist
-- Next Steps
-```
-
-### 5. Template Loader (`template-loader.go`)
-
-**Purpose**: Test template management and rendering
-
-**Template Types**:
-- **Standard Go Testing**: Table-driven tests with testify assertions
-- **GoMonkey Mocking**: GoMonkey v2 patterns for external function mocking
-- **Ginkgo BDD**: Behavior-driven development for integration tests
-
-**Embedded Templates**: Fallback hardcoded templates ensure reliability
+**PR Creation Process**:
+1. Create new branch with timestamp
+2. Add generated test files to git
+3. Create detailed commit message
+4. Push branch to remote
+5. Create PR with comprehensive description
 
 ## ✨ Features
 
 ### Current Features
 
 #### 1. AI Integration
-- **Gemini 1.5 Flash**: Advanced code generation with 2400+ character capacity
-- **Intelligent Prompting**: Context-aware prompts with KubeEdge specifics
-- **Error Recovery**: Retry mechanisms with failure context
-- **Quality Optimization**: Temperature and parameter tuning
+- **Google Gemini 1.5 Flash**: High-quality code generation for Go test files
+- **Simplified Approach**: Whole-file analysis instead of function-by-function
+- **Smart Test Framework Selection**: Automatically chooses between standard Go testing and GoMonkey mocking
+- **Context-Aware Generation**: KubeEdge-specific patterns and conventions
+- **Retry Logic**: Up to 3 attempts with improved prompting on failures
 
-#### 2. Coverage Detection
-- **Threshold-Based Analysis**: Configurable coverage thresholds (40-50%)
-- **Multiple Coverage Sources**: `coverage.out` parsing and live analysis
-- **Smart Function Detection**: AST-based function extraction
-- **Existing Test Awareness**: Identifies already tested functions
+#### 2. Coverage Analysis
+- **Threshold-Based Filtering**: Configurable coverage threshold (default: 40%)
+- **Git Integration**: Automatic detection of modified files from git diff
+- **Live Coverage Calculation**: Real-time coverage analysis using `go test -coverprofile`
+- **Target Directory Filtering**: Focuses on core KubeEdge components (`cloud/`, `edge/`, `keadm/`, `pkg/`)
 
-#### 3. KubeEdge Integration
-- **Component Awareness**: Different patterns for cloud/edge/keadm/pkg
-- **Framework Compliance**: gomonkey v2, testify, Ginkgo support
-- **Dependency Management**: Uses root KubeEdge module dependencies
-- **Testing Standards**: Follows established KubeEdge conventions
+#### 3. Test Validation
+- **Compilation Verification**: Ensures generated tests compile successfully
+- **Execution Validation**: Runs tests to verify they pass
+- **Coverage Improvement**: Measures before/after coverage gains
+- **Smart Cleanup**: Automatically removes failing tests, keeps passing ones
+- **Code Formatting**: Uses `goimports` for proper import management
 
-#### 4. GitHub Automation
-- **PR Management**: Creates PRs for generated tests
-- **Rich Metadata**: Comprehensive PR descriptions with checklists
-- **Label Automation**: Auto-applies relevant labels and reviewers
-- **Rate Limit Handling**: GitHub API rate limit monitoring
+#### 4. GitHub Workflow Integration
+- **Automated Triggers**: Runs on merged PRs with Go file changes
+- **PR Creation**: Creates detailed PRs with generated tests
+- **Rich Descriptions**: Coverage tables, generation details, review checklists
+- **Branch Management**: Smart branch naming with timestamps
+- **Artifact Upload**: Logs and results preserved for debugging
 
-#### 5. Reliability Features
-- **Retry Logic**: Configurable retry attempts (default: 3)
-- **Comprehensive Logging**: Detailed execution tracking
-- **Artifact Management**: Log uploads and coverage reports
-- **Graceful Degradation**: Continues processing despite individual failures
+#### 5. Developer Experience
+- **CLI Interface**: Comprehensive command-line tool for local testing
+- **Debug Mode**: Verbose logging for troubleshooting
+- **Flexible Configuration**: Environment variables and command-line flags
+- **Manual Override**: Specify exact files to process
+- **No-PR Mode**: Generate tests locally without creating PRs
 
 ## 🔄 Workflow Integration
 
@@ -223,12 +208,13 @@ on:
 - ✅ Go files only (excludes `_test.go` files)
 
 **Process Flow**:
-1. Developer merges PR with Go code changes
-2. GitHub Actions workflow triggers automatically
-3. Test Generator Pipeline analyzes changed files
-4. Coverage Analysis identifies low-coverage files
-5. Gemini AI generates comprehensive unit tests
-6. PR Creation creates automated test PRs
+1. Developer merges PR with Go code changes in target directories
+2. GitHub Actions workflow triggers automatically  
+3. Changed files are filtered (only core KubeEdge components)
+4. Coverage analysis identifies files with coverage < 40%
+5. Gemini AI generates unit tests for each low-coverage file
+6. Tests are validated (compilation + execution + coverage improvement)
+7. Successful tests are committed and PR is created automatically
 
 ## ⚙️ Configuration
 
@@ -244,300 +230,178 @@ COVERAGE_THRESHOLD=40.0
 MAX_RETRIES=3
 ```
 
-### Configuration Structure
+### Workflow Configuration
 
-**Command Line Options**:
-- `coverage-threshold`: Coverage threshold percentage (default: 40.0)
-- `max-retries`: Maximum retry attempts (default: 3)
-- `gemini-api-key`: Gemini API key for test generation
-- `changed-files`: Comma-separated list of files to process
-- `working-dir`: Working directory (default: current)
-- `debug`: Enable debug logging
-- `create-pr`: Create GitHub PR with generated tests
-- `github-token`: GitHub token for PR creation
-- `repo-owner`: GitHub repository owner
-- `repo-name`: GitHub repository name
+**GitHub Actions Environment Variables**:
+- `COVERAGE_THRESHOLD`: 40.0 (configurable in workflow)
+- `MAX_RETRIES`: 3 (configurable in workflow)
 
-### KubeEdge Patterns Configuration
+**GitHub Secrets Required**:
+- `GEMINI_API_KEY`: Google Gemini API key for test generation
+- `GITHUB_TOKEN`: Automatically provided by GitHub Actions
 
-```json
-{
-  "components": {
-    "keadm": {
-      "patterns": ["exec.Command", "os.Stat", "os.ReadFile", "os.WriteFile"],
-      "imports": ["os", "os/exec", "github.com/agiledragon/gomonkey/v2"]
-    },
-    "cloud": {
-      "patterns": ["client.Get", "client.Create", "kubernetes.NewForConfig"],
-      "imports": ["context", "k8s.io/client-go/kubernetes", "github.com/agiledragon/gomonkey/v2"]
-    },
-    "edge": {
-      "patterns": ["orm.RegisterDriver", "orm.NewOrmUsingDB"],
-      "imports": ["context", "github.com/beego/beego/v2/client/orm", "github.com/agiledragon/gomonkey/v2"]
-    }
-  },
-  "testing": {
-    "frameworks": ["standard", "gomonkey", "ginkgo"],
-    "default_framework": "gomonkey",
-    "coverage_threshold": 40.0
-  }
-}
-```
+**Target Directories**: 
+- `cloud/` - Cloud-side KubeEdge components
+- `edge/` - Edge-side KubeEdge components  
+- `keadm/` - KubeEdge administration tools
+- `pkg/` - Shared packages and utilities
 
 ## 🛠️ Development Setup
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.22+ (as specified in GitHub Actions)
 - Git
-- GitHub CLI (optional)
-- Gemini API access
+- Google Gemini API access
+- GitHub CLI (for PR creation)
 
 ### Local Development Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/kubeedge/kubeedge.git
+# Navigate to test generator directory
 cd kubeedge/scripts/test-generator
 
-# Set up environment
-cp .env.example .env
-# Add your GEMINI_API_KEY and GITHUB_TOKEN
-
-# Install dependencies
-go mod tidy
+# Set up environment variables
+export GEMINI_API_KEY="your-gemini-api-key"
+export GITHUB_TOKEN="your-github-token"  # Optional, for PR creation
 
 # Validate setup
-go run . -help
+go run . --help
 ```
 
-### Testing & Validation
+### Local Testing Commands
 
 ```bash
-# Run unit tests for the generator
-go test ./scripts/test-generator/...
+# Test without PR creation (recommended for development)
+cd scripts/test-generator && go run . \
+  --coverage-threshold=40.0 \
+  --max-retries=3 \
+  --debug=true \
+  --working-dir="../../"
 
-# Validate with sample files
-go run . -changed-files="pkg/sample/test.go" -debug=true
+# Test specific files
+go run . \
+  --changed-files="pkg/example/file.go,cloud/pkg/controller/manager.go" \
+  --debug=true \
+  --working-dir="../../"
 
-# Test specific KubeEdge components
-go run . -changed-files="cloud/pkg/common/monitor/monitor.go" -coverage-threshold=30.0
+# Validate generated tests
+cd ../../ && go test -c ./path/to/package
+cd ../../ && go test -coverprofile=coverage.out ./path/to/package
 
-# Test with multiple files
-go run . -changed-files="cloud/pkg/monitor/monitor.go,edge/pkg/edged/edged.go" -debug=true
-
-# Validate generated tests compile
-cd path/to/generated/tests && go test -c
-
-# Check coverage improvement
-go test -coverprofile=before.out ./target/package/
-# Generate tests...
-go test -coverprofile=after.out ./target/package/
-go tool cover -func=before.out | grep total
-go tool cover -func=after.out | grep total
-
-# Test GitHub integration (requires tokens)
-go run . -create-pr -github-token="$GITHUB_TOKEN" -repo-owner="kubeedge" -repo-name="kubeedge"
-
-# Debug mode with verbose logging
-go run . -debug=true -changed-files="your-file.go" 2>&1 | tee debug.log
+# Test with PR creation (requires GitHub tokens)
+go run . \
+  --create-pr \
+  --github-token="$GITHUB_TOKEN" \
+  --repo-owner="your-fork" \
+  --repo-name="kubeedge" \
+  --debug=true \
+  --working-dir="../../"
 ```
 
 ## 📖 Usage
 
-### Command Line Interface
+### Automatic GitHub Actions Usage
+
+The system runs automatically when:
+1. **PR Merged**: A PR with Go file changes is merged to the main branch
+2. **Target Directories**: Files are in `cloud/`, `edge/`, `keadm/`, or `pkg/` directories  
+3. **Low Coverage**: Files have test coverage below 40%
+4. **File Types**: Only `.go` files (excluding `_test.go` files)
+
+**What happens automatically**:
+1. Analyzes merged PR files for coverage
+2. Generates unit tests for low-coverage files using Gemini AI
+3. Validates generated tests (compilation + execution)
+4. Creates PR with successful tests
+5. Uploads logs and artifacts for review
+
+### Manual Local Testing
 
 ```bash
-# Basic usage
-go run . -changed-files="file1.go,file2.go" -gemini-api-key="your-key"
+# Basic local testing (no PR creation)
+cd scripts/test-generator
+export GEMINI_API_KEY="your-api-key"
+go run . --debug=true --working-dir="../../"
 
-# With all options
+# Test specific files manually
 go run . \
-  -changed-files="cloud/pkg/monitor/monitor.go" \
-  -coverage-threshold=40.0 \
-  -max-retries=3 \
-  -gemini-api-key="your-api-key" \
-  -debug=true \
-  -create-pr \
-  -github-token="your-github-token" \
-  -repo-owner="kubeedge" \
-  -repo-name="kubeedge"
+  --changed-files="cloud/pkg/controller/manager.go,pkg/util/helper.go" \
+  --debug=true \
+  --working-dir="../../"
+
+# Test with custom coverage threshold
+go run . \
+  --coverage-threshold=30.0 \
+  --debug=true \
+  --working-dir="../../"
 ```
 
-### GitHub Actions Integration
+### Generated PR Structure
 
-The system automatically runs when:
-1. A PR with Go file changes is merged
-2. Files are in target directories (`cloud/`, `edge/`, `keadm/`, `pkg/`)
-3. Coverage is below the threshold (40%)
-
-### Manual Workflow Trigger
-
-```bash
-# Trigger for specific files
-gh workflow run auto-test-generator.yml \
-  -f changed_files="cloud/pkg/common/monitor/monitor.go" \
-  -f coverage_threshold="40.0"
-```
+When tests are successfully generated, the system creates a PR with:
+- **Title**: `🤖 Auto-generated unit tests for PR #<number>`
+- **Coverage Table**: Before/after coverage percentages
+- **Validation Status**: Compilation and execution results
+- **Generation Details**: LLM provider, approach, timing
+- **Review Checklist**: Next steps for maintainers
 
 ## 🚀 Future Enhancements
 
-### Phase 0: Intelligent Feedback Loop (Priority Implementation)
+### Phase 1: Enhanced Test Generation
 
-#### Current Problem
+#### 1. Smart Cleanup Implementation
+**Current Status**: Basic implementation exists - automatically removes failing tests, keeps passing ones
+**Proposed Improvements**:
+- **Individual Test Extraction**: Parse test files to identify and preserve working test functions
+- **Feedback Loop**: Send compilation/execution errors back to Gemini for iterative fixes
+- **Partial Success Metrics**: Report coverage improvements even when some tests fail
 
-The KubeEdge Auto Test Generator currently works on an **all-or-nothing basis**:
+#### 2. Test Quality Improvements
+- **Coverage-Guided Generation**: Target specific uncovered code lines/branches
+- **Edge Case Detection**: Generate tests for error handling and boundary conditions
+- **Dependency Mocking**: Smarter detection of external dependencies requiring mocks
+- **Test Organization**: Better test structure with setup/teardown patterns
 
-```
-Generate Tests → Validate → Success (keep all) OR Failure (discard all)
-```
+### Phase 2: Multi-LLM Support
 
-**Real Example from Recent Test**:
-- File: `pkg/math/math.go`
-- ✅ **Compilation**: SUCCESS  
-- ✅ **Coverage**: 98.3% (excellent!)
-- ❌ **One Test Failed**: `TestCalculateStatistics` had wrong expected value (expected 1, got 5)
-- **Current Result**: Complete failure - all tests discarded, 0% coverage retained
+#### 1. Alternative LLM Providers
+- **DeepSeek Integration**: Free alternative with good Go code generation
+- **Claude Integration**: High-quality code generation for complex scenarios
+- **Local LLM Support**: Ollama integration for offline/private environments
+- **Fallback Chain**: Automatic failover between available LLM providers
 
-**Problem**: We're throwing away 98.3% coverage because of one fixable test logic error.
+#### 2. Model Optimization
+- **Provider Selection**: Choose optimal LLM based on file complexity/size
+- **Cost Optimization**: Balance between quality and API costs
+- **Rate Limit Handling**: Smart request distribution across providers
 
-#### Proposed Solution: Intelligent Feedback Loop
+### Phase 3: E2E Test Generation
 
-Instead of giving up after first failure, create a feedback loop with iterative improvement:
+#### 1. Integration Test Support
+- **Ginkgo BDD Framework**: Generate behavior-driven development tests
+- **Component Integration**: Tests for cloud-edge communication
+- **API Endpoint Testing**: REST API and gRPC endpoint validation
+- **Container/Pod Testing**: Kubernetes resource integration tests
 
-```mermaid
-graph TD
-    A[Generate Tests] --> B[Validate Tests]
-    B --> C{All Tests Pass?}
-    C -->|Yes| D[Success: Keep All Tests]
-    C -->|No| E{Attempts < 3?}
-    E -->|Yes| F[Send Error to LLM]
-    F --> G[Generate Fixed Tests]
-    G --> B
-    E -->|No| H[Smart Fallback]
-    H --> I[Keep Working Tests]
-    I --> J[Remove Broken Tests]
-    J --> K[Partial Success with Max Coverage]
-```
+#### 2. Scenario-Based Testing
+- **Edge Computing Scenarios**: Device management, connectivity loss, failover
+- **Performance Testing**: Load testing for edge-cloud synchronization
+- **Security Testing**: Authentication, authorization, and encryption tests
 
-#### Implementation Strategy
+### Phase 4: Developer Experience
 
-**Step 1: Enhanced Validation with Detailed Error Reporting**
-- Track individual test results and error types
-- Classify errors as Logic, Compilation, or Runtime issues
-- Generate fix hints for common problems
-
-**Step 2: Feedback Loop Implementation**
-- Implement retry mechanism (max 3 attempts)
-- Send detailed error feedback to LLM
-- Update test files with corrected versions
-
-**Step 3: Smart Fallback - Partial Success Extraction**
-- Parse test files to identify working vs broken tests
-- Create cleaned test files with only working tests
-- Preserve maximum possible coverage
-
-**Testing Commands**:
-```bash
-# Test the feedback loop locally
-go run . -changed-files="pkg/math/math.go" -max-retries=3 -debug=true
-
-# Validate smart fallback
-go test -v ./pkg/math/ 2>&1 | grep FAIL
-
-# Check coverage preservation
-go test -coverprofile=coverage.out ./pkg/math/
-go tool cover -func=coverage.out
-```
-
-#### Example Scenarios
-
-**Scenario 1: Logic Error (Quick Fix)**
-```
-Attempt 1: 98.3% coverage, 1 test fails with "expected 1, got 5"
-Attempt 2: LLM fixes test logic → 98.3% coverage, all pass ✅
-Result: Complete success in 2 attempts
-```
-
-**Scenario 2: Multiple Issues (Iterative Improvement)**
-```
-Attempt 1: 80% coverage, 3 tests fail
-Attempt 2: 85% coverage, 2 tests fail  
-Attempt 3: 90% coverage, 1 test fails
-Final: Remove 1 failing test, keep 90% coverage ✅
-```
-
-**Scenario 3: Unfixable Issues (Maximum Value Extraction)**
-```
-All 3 attempts fail with compilation errors
-Smart Fallback: Keep 95% of working tests
-Result: 75% coverage instead of 0% ✅
-```
-
-#### LLM Feedback Prompt Enhancement
-
-The system sends detailed feedback to the LLM including:
-- Current test file content
-- Specific validation errors
-- Compilation issues and line numbers
-- Expected vs actual results for failed assertions
-- Requirements for fixing only the failing tests while preserving working ones
-
-#### Expected Improvements
-
-**Coverage Retention Rate**:
-- Current: ~30% (all-or-nothing)
-- With Feedback Loop: ~85% (estimated)
-- With Smart Fallback: ~95% (maximum possible)
-
-**Success Rate Improvement**:
-- Current: 60% complete success
-- Target: 90% complete or partial success
-
-**Quality Metrics**:
-- Reduced manual intervention by ~70%
-- Improved test maintainability
-- Better error reporting for developers
-
-### Phase 1: Multi-LLM Support & E2E Integration
-
-#### 1. Free LLM Models Integration
-- **DeepSeek Integration**: Primary free alternative to Gemini
-- **Ollama Support**: Local LLM deployment for privacy-sensitive environments
-- **Hugging Face Transformers**: Access to open-source code generation models
-- **Model Fallback Chain**: Automatic failover between available free models
-
-#### 2. E2E Test Generation
-- **Ginkgo BDD Framework**: Generate comprehensive e2e tests
-- **Component Integration Tests**: Test interactions between cloud and edge
-- **API Endpoint Testing**: Generate tests for KubeEdge API endpoints
-- **Scenario-Based Testing**: Create realistic edge computing test scenarios
-
-### Phase 2: Quality & Validation Improvements
-
-#### 1. Test Quality Metrics
-- **Coverage-Guided Generation**: Target specific uncovered lines
-- **Test Effectiveness Scoring**: Measure bug-catching capability
-- **Automated Test Execution**: Run tests before PR creation
-
-#### 2. Smart Learning System
-- **Pattern Recognition**: Learn from successful merged test PRs
-- **Feedback Integration**: Improve based on PR review comments
-- **Component-Specific Learning**: Adapt patterns for different components
-
-### Phase 3: Developer Experience Enhancement
-
-#### 1. Review Process Optimization
-- **Test Quality Scoring**: Provide quality metrics in PR descriptions
-- **Diff Highlighting**: Show exactly which lines/functions are tested
-- **Review Guidelines**: Generate specific review checklists
-
-#### 2. Integration Improvements
-- **Batch Processing**: Handle multiple files efficiently
-- **Smart PR Grouping**: Group related test files logically
+#### 1. Enhanced Workflow Integration
+- **Manual Triggers**: GitHub workflow dispatch for specific components
+- **Selective Generation**: Target specific packages or modules
+- **Batch Processing**: Handle multiple related files efficiently
 - **Conflict Resolution**: Handle merge conflicts in generated tests
 
+#### 2. Quality Metrics & Reporting
+- **Test Effectiveness Scoring**: Measure bug detection capability
+- **Coverage Heat Maps**: Visual representation of test coverage improvements
+- **Success Rate Tracking**: Monitor generation success rates over time
+- **Review Guidelines**: Generate component-specific review checklists
 
-## Conclusion
 
-The KubeEdge Auto Test Generator represents a significant advancement in automated software testing for edge computing platforms. By combining AI-powered code generation with deep integration into the KubeEdge development workflow.
+*The KubeEdge Auto Test Generator is an ongoing project focused on improving software quality through intelligent automation while maintaining the high standards of the KubeEdge edge computing platform.*
